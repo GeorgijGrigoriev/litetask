@@ -13,6 +13,7 @@ import {
   Card,
   Col,
   Empty,
+  Form,
   Input,
   Layout,
   Popconfirm,
@@ -21,6 +22,7 @@ import {
   Space,
   Spin,
   Tag,
+  Tabs,
   message,
 } from 'antd'
 import axios from 'axios'
@@ -44,6 +46,12 @@ type Project = {
   createdAt: string
 }
 
+type User = {
+  id: number
+  email: string
+  role: 'admin' | 'user' | 'blocked'
+}
+
 const statusOrder: StatusKey[] = ['new', 'in_progress', 'done']
 
 const statusMeta: Record<StatusKey, { label: string; color: string; icon: ReactNode }> = {
@@ -54,6 +62,7 @@ const statusMeta: Record<StatusKey, { label: string; color: string; icon: ReactN
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || '/api',
+  withCredentials: true,
 })
 
 const formatDate = (value: string) =>
@@ -216,6 +225,63 @@ function App() {
   const [commentDraft, setCommentDraft] = useState('')
   const [deletingTaskId, setDeletingTaskId] = useState<number | null>(null)
   const [deletingProject, setDeletingProject] = useState(false)
+  const [user, setUser] = useState<User | null>(null)
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login')
+  const [authLoading, setAuthLoading] = useState(false)
+  const [authError, setAuthError] = useState('')
+
+  const fetchMe = async () => {
+    try {
+      const response = await api.get<User>('/auth/me')
+      setUser(response.data)
+    } catch (error) {
+      setUser(null)
+    }
+  }
+
+  const handleAuth = async (email: string, password: string, mode: 'login' | 'register') => {
+    setAuthLoading(true)
+    setAuthError('')
+    try {
+      const response =
+        mode === 'login'
+          ? await api.post<User>('/auth/login', { email, password })
+          : await api.post<User>('/auth/register', { email, password })
+      setUser(response.data)
+      message.success(mode === 'login' ? 'Вход выполнен' : 'Регистрация успешна')
+      void loadProjects()
+      void loadTasks()
+    } catch (error) {
+      console.error(error)
+      if (axios.isAxiosError(error)) {
+        if (error.response?.status === 403 && mode === 'register') {
+          setAuthError('Регистрация отключена')
+        } else if (error.response?.status === 401) {
+          setAuthError('Неверные учетные данные')
+        } else if (error.response?.data) {
+          setAuthError(typeof error.response.data === 'string' ? error.response.data : 'Ошибка')
+        } else {
+          setAuthError('Ошибка запроса')
+        }
+      } else {
+        setAuthError('Ошибка запроса')
+      }
+    } finally {
+      setAuthLoading(false)
+    }
+  }
+
+  const handleLogout = async () => {
+    try {
+      await api.post('/auth/logout')
+    } catch (error) {
+      console.error(error)
+    }
+    setUser(null)
+    setTasks([])
+    setProjects([])
+    setSelectedProject(null)
+  }
 
   const grouped = useMemo(() => {
     const bucket: Record<StatusKey, Task[]> = {
@@ -228,7 +294,7 @@ function App() {
   }, [tasks])
 
   const loadTasks = async (projectId = selectedProject) => {
-    if (!projectId) {
+    if (!user || !projectId) {
       setLoading(false)
       setTasks([])
       return
@@ -246,6 +312,12 @@ function App() {
   }
 
   const loadProjects = async () => {
+    if (!user) {
+      setProjects([])
+      setSelectedProject(null)
+      setLoadingProjects(false)
+      return
+    }
     setLoadingProjects(true)
     try {
       const response = await api.get<Project[]>('/projects')
@@ -266,14 +338,22 @@ function App() {
   }
 
   useEffect(() => {
-    loadProjects()
+    void fetchMe()
   }, [])
 
   useEffect(() => {
-    loadTasks()
-  }, [selectedProject])
+    void loadProjects()
+  }, [user])
+
+  useEffect(() => {
+    void loadTasks()
+  }, [selectedProject, user])
 
   const handleCreate = async () => {
+    if (!user) {
+      message.warning('Авторизуйтесь, чтобы создавать задачи')
+      return
+    }
     if (!selectedProject) {
       message.warning('Сначала выберите проект')
       return
@@ -356,6 +436,10 @@ function App() {
   }
 
   const handleCreateProject = async () => {
+    if (!user) {
+      message.warning('Авторизуйтесь, чтобы создавать проекты')
+      return
+    }
     const name = newProjectName.trim()
     if (!name) {
       message.warning('Введите название проекта')
@@ -384,6 +468,10 @@ function App() {
     if (!selectedProject) {
       return
     }
+    if (user?.role !== 'admin') {
+      message.error('Удаление проектов доступно только администратору')
+      return
+    }
     setDeletingProject(true)
     try {
       await api.delete(`/projects/${selectedProject}`)
@@ -408,13 +496,63 @@ function App() {
     }
   }
 
+  if (!user) {
+    return (
+      <Layout className="layout">
+        <Layout.Header className="header">
+          <div className="brand">LiteTask</div>
+        </Layout.Header>
+        <Layout.Content className="content">
+          <Card className="auth-card" title="Войдите или зарегистрируйтесь">
+            <Tabs
+              activeKey={authMode}
+              onChange={(key) => setAuthMode(key as 'login' | 'register')}
+              items={[
+                { key: 'login', label: 'Вход' },
+                { key: 'register', label: 'Регистрация' },
+              ]}
+            />
+            <Form
+              layout="vertical"
+              onFinish={(values) =>
+                handleAuth(values.email, values.password, authMode)
+              }
+            >
+              <Form.Item name="email" label="Email" rules={[{ required: true, type: 'email' }]}>
+                <Input placeholder="you@example.com" />
+              </Form.Item>
+              <Form.Item
+                name="password"
+                label="Пароль"
+                rules={[{ required: true, min: 6, message: 'Минимум 6 символов' }]}
+              >
+                <Input.Password placeholder="••••••" />
+              </Form.Item>
+              {authError && <div className="auth-error">{authError}</div>}
+              <Button type="primary" htmlType="submit" block loading={authLoading}>
+                {authMode === 'login' ? 'Войти' : 'Зарегистрироваться'}
+              </Button>
+            </Form>
+          </Card>
+        </Layout.Content>
+      </Layout>
+    )
+  }
+
   return (
     <Layout className="layout">
       <Layout.Header className="header">
         <div className="brand">LiteTask</div>
-        <Button type="default" icon={<ReloadOutlined />} onClick={() => loadTasks()}>
-          Обновить
-        </Button>
+        <Space>
+          <Tag color={user.role === 'admin' ? 'green' : 'blue'}>
+            {user.role === 'admin' ? 'Админ' : 'Пользователь'}
+          </Tag>
+          <span className="user-email">{user.email}</span>
+          <Button type="default" icon={<ReloadOutlined />} onClick={() => loadTasks()}>
+            Обновить
+          </Button>
+          <Button onClick={handleLogout}>Выйти</Button>
+        </Space>
       </Layout.Header>
       <Layout.Content className="content">
         <Card className="project-card" title="Проекты">

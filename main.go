@@ -14,13 +14,20 @@ import (
 	"strings"
 	"time"
 
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	_ "github.com/mattn/go-sqlite3"
+	"golang.org/x/crypto/bcrypt"
 )
 
 const (
 	defaultAddr        = ":8080"
 	defaultDBPath      = "tasks.db"
+	defaultAuthExpiry  = 30 * 24 * time.Hour
 	defaultProjectID   = 1
 	defaultProjectName = "Общий"
 )
@@ -39,6 +46,32 @@ var statusTitles = map[string]string{
 
 var errInvalidStatus = errors.New("invalid status")
 
+func loadSecret() ([]byte, error) {
+	if val := os.Getenv("AUTH_SECRET"); val != "" {
+		decoded, err := base64.StdEncoding.DecodeString(val)
+		if err == nil && len(decoded) >= 32 {
+			return decoded, nil
+		}
+		if len(val) >= 32 {
+			return []byte(val), nil
+		}
+	}
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		return nil, err
+	}
+	log.Printf("generated random auth secret; set AUTH_SECRET to persist sessions")
+	return secret, nil
+}
+
+func randomPassword() string {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return "changeme123"
+	}
+	return base64.RawStdEncoding.EncodeToString(b)
+}
+
 type task struct {
 	ID        int64     `json:"id"`
 	Title     string    `json:"title"`
@@ -49,7 +82,9 @@ type task struct {
 }
 
 type server struct {
-	db *sql.DB
+	db                *sql.DB
+	authSecret        []byte
+	allowRegistration bool
 }
 
 type project struct {
@@ -57,6 +92,18 @@ type project struct {
 	Name      string    `json:"name"`
 	CreatedAt time.Time `json:"createdAt"`
 }
+
+type user struct {
+	ID        int64     `json:"id"`
+	Email     string    `json:"email"`
+	Password  string    `json:"-"`
+	Role      string    `json:"role"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+type ctxKey string
+
+const ctxUser ctxKey = "user"
 
 func (s *server) insertTask(title, comment string, projectID int64) (task, error) {
 	var t task
@@ -200,6 +247,145 @@ func (s *server) deleteProject(id int64) error {
 	return tx.Commit()
 }
 
+func (s *server) createUser(email, password, role string) (user, error) {
+	var u user
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return u, err
+	}
+	res, err := s.db.Exec(`INSERT INTO users (email, password_hash, role) VALUES (?, ?, ?)`, email, string(hash), role)
+	if err != nil {
+		return u, err
+	}
+	id, _ := res.LastInsertId()
+	err = s.db.QueryRow(`SELECT id, email, password_hash, role, created_at FROM users WHERE id = ?`, id).
+		Scan(&u.ID, &u.Email, &u.Password, &u.Role, &u.CreatedAt)
+	if err != nil {
+		return u, err
+	}
+	u.CreatedAt = u.CreatedAt.UTC()
+	return u, nil
+}
+
+func (s *server) getUserByEmail(email string) (user, error) {
+	var u user
+	err := s.db.QueryRow(`SELECT id, email, password_hash, role, created_at FROM users WHERE email = ?`, email).
+		Scan(&u.ID, &u.Email, &u.Password, &u.Role, &u.CreatedAt)
+	if err != nil {
+		return u, err
+	}
+	u.CreatedAt = u.CreatedAt.UTC()
+	return u, nil
+}
+
+func (s *server) getUserByID(id int64) (user, error) {
+	var u user
+	err := s.db.QueryRow(`SELECT id, email, password_hash, role, created_at FROM users WHERE id = ?`, id).
+		Scan(&u.ID, &u.Email, &u.Password, &u.Role, &u.CreatedAt)
+	if err != nil {
+		return u, err
+	}
+	u.CreatedAt = u.CreatedAt.UTC()
+	return u, nil
+}
+
+func (s *server) authenticate(r *http.Request) (user, error) {
+	cookie, err := r.Cookie("auth")
+	if err != nil {
+		return user{}, err
+	}
+	claims, err := parseToken(cookie.Value, s.authSecret)
+	if err != nil {
+		return user{}, err
+	}
+	u, err := s.getUserByID(claims.UserID)
+	if err != nil {
+		return user{}, err
+	}
+	if u.Role == "blocked" {
+		return user{}, errors.New("blocked")
+	}
+	return u, nil
+}
+
+type tokenClaims struct {
+	UserID int64
+	Role   string
+	Exp    time.Time
+}
+
+func createToken(u user, secret []byte) string {
+	exp := time.Now().Add(defaultAuthExpiry).Unix()
+	payload := fmt.Sprintf("%d:%s:%d", u.ID, u.Role, exp)
+	sig := sign(secret, payload)
+	return base64.RawStdEncoding.EncodeToString([]byte(payload)) + "." + sig
+}
+
+func parseToken(token string, secret []byte) (tokenClaims, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 2 {
+		return tokenClaims{}, errors.New("invalid token")
+	}
+	payloadBytes, err := base64.RawStdEncoding.DecodeString(parts[0])
+	if err != nil {
+		return tokenClaims{}, err
+	}
+	payload := string(payloadBytes)
+	if !verify(secret, payload, parts[1]) {
+		return tokenClaims{}, errors.New("invalid signature")
+	}
+	items := strings.Split(payload, ":")
+	if len(items) != 3 {
+		return tokenClaims{}, errors.New("invalid payload")
+	}
+	id, err := strconv.ParseInt(items[0], 10, 64)
+	if err != nil {
+		return tokenClaims{}, err
+	}
+	role := items[1]
+	expUnix, err := strconv.ParseInt(items[2], 10, 64)
+	if err != nil {
+		return tokenClaims{}, err
+	}
+	if time.Now().Unix() > expUnix {
+		return tokenClaims{}, errors.New("token expired")
+	}
+	return tokenClaims{UserID: id, Role: role, Exp: time.Unix(expUnix, 0)}, nil
+}
+
+func sign(secret []byte, payload string) string {
+	h := hmac.New(sha256.New, secret)
+	h.Write([]byte(payload))
+	return base64.RawStdEncoding.EncodeToString(h.Sum(nil))
+}
+
+func verify(secret []byte, payload, sig string) bool {
+	expected := sign(secret, payload)
+	return hmac.Equal([]byte(expected), []byte(sig))
+}
+
+func setAuthCookie(w http.ResponseWriter, token string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "auth",
+		Value:    token,
+		Path:     "/",
+		MaxAge:   int(defaultAuthExpiry.Seconds()),
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func clearAuthCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "auth",
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
 func main() {
 	dbPath := envOrDefault("DB_PATH", defaultDBPath)
 	db, err := initDB(dbPath)
@@ -211,7 +397,16 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	s := &server{db: db}
+	secret, err := loadSecret()
+	if err != nil {
+		log.Fatalf("failed to load auth secret: %v", err)
+	}
+
+	s := &server{
+		db:                db,
+		authSecret:        secret,
+		allowRegistration: envOrDefault("ALLOW_REGISTRATION", "true") != "false",
+	}
 	go s.startTelegramBot(ctx)
 
 	log.Printf("listening on %s", defaultAddr)
@@ -241,6 +436,13 @@ func initDB(path string) (*sql.DB, error) {
 CREATE TABLE IF NOT EXISTS projects (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	name TEXT NOT NULL UNIQUE,
+	created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS users (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	email TEXT NOT NULL UNIQUE,
+	password_hash TEXT NOT NULL,
+	role TEXT NOT NULL DEFAULT 'user',
 	created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS tasks (
@@ -282,6 +484,9 @@ CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 	if err := ensureDefaultProject(db); err != nil {
 		log.Printf("warning: unable to ensure default project: %v", err)
 	}
+	if err := ensureAdminUser(db); err != nil {
+		log.Printf("warning: unable to ensure admin user: %v", err)
+	}
 	return db, nil
 }
 
@@ -293,12 +498,64 @@ func ensureDefaultProject(db *sql.DB) error {
 	return err
 }
 
+func ensureAdminUser(db *sql.DB) error {
+	adminEmail := envOrDefault("ADMIN_EMAIL", "admin@example.com")
+	adminPassword := os.Getenv("ADMIN_PASSWORD")
+
+	var existing user
+	err := db.QueryRow(`SELECT id, email FROM users WHERE role = 'admin' ORDER BY id LIMIT 1`).Scan(&existing.ID, &existing.Email)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+
+	// If admin exists, allow updating email/password via env.
+	if existing.ID != 0 {
+		if adminEmail != "" && adminEmail != existing.Email {
+			if _, err := db.Exec(`UPDATE users SET email = ? WHERE id = ?`, adminEmail, existing.ID); err != nil {
+				return err
+			}
+			log.Printf("updated admin email to %s from ADMIN_EMAIL", adminEmail)
+		}
+		if adminPassword != "" {
+			hash, err := bcrypt.GenerateFromPassword([]byte(adminPassword), bcrypt.DefaultCost)
+			if err != nil {
+				return err
+			}
+			if _, err := db.Exec(`UPDATE users SET password_hash = ? WHERE id = ?`, string(hash), existing.ID); err != nil {
+				return err
+			}
+			log.Printf("updated admin password from ADMIN_PASSWORD")
+		}
+		return nil
+	}
+
+	// Create admin if none exists.
+	password := adminPassword
+	if password == "" {
+		password = randomPassword()
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	if _, err := db.Exec(`INSERT INTO users (email, password_hash, role) VALUES (?, ?, 'admin')`, adminEmail, string(hash)); err != nil {
+		return err
+	}
+	if adminPassword == "" {
+		log.Printf("created default admin: %s / %s", adminEmail, password)
+	} else {
+		log.Printf("created admin from env: %s", adminEmail)
+	}
+	return nil
+}
+
 func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("/api/tasks", s.cors(http.HandlerFunc(s.handleTasks)))
-	mux.Handle("/api/tasks/", s.cors(http.HandlerFunc(s.handleTaskActions)))
-	mux.Handle("/api/projects", s.cors(http.HandlerFunc(s.handleProjects)))
-	mux.Handle("/api/projects/", s.cors(http.HandlerFunc(s.handleProjectActions)))
+	mux.Handle("/api/auth/", s.cors(http.HandlerFunc(s.handleAuthRoutes)))
+	mux.Handle("/api/tasks", s.cors(s.requireUser(http.HandlerFunc(s.handleTasks))))
+	mux.Handle("/api/tasks/", s.cors(s.requireUser(http.HandlerFunc(s.handleTaskActions))))
+	mux.Handle("/api/projects", s.cors(s.requireUser(http.HandlerFunc(s.handleProjects))))
+	mux.Handle("/api/projects/", s.cors(s.requireUser(http.HandlerFunc(s.handleProjectActions))))
 	mux.Handle("/", s.staticHandler("web/dist"))
 	return mux
 }
@@ -306,13 +563,45 @@ func (s *server) routes() http.Handler {
 func (s *server) cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PATCH,OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Authorization")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *server) requireUser(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u, err := s.authenticate(r)
+		if err != nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if u.Role == "blocked" {
+			http.Error(w, "account blocked", http.StatusForbidden)
+			return
+		}
+		ctx := context.WithValue(r.Context(), ctxUser, u)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+func (s *server) requireAdmin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u, err := s.authenticate(r)
+		if err != nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if u.Role != "admin" {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		ctx := context.WithValue(r.Context(), ctxUser, u)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
@@ -374,6 +663,22 @@ func (s *server) handleProjects(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *server) handleAuthRoutes(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/auth")
+	switch {
+	case strings.HasPrefix(path, "/login") && r.Method == http.MethodPost:
+		s.handleLogin(w, r)
+	case strings.HasPrefix(path, "/register") && r.Method == http.MethodPost:
+		s.handleRegister(w, r)
+	case strings.HasPrefix(path, "/me") && r.Method == http.MethodGet:
+		s.handleMe(w, r)
+	case strings.HasPrefix(path, "/logout") && r.Method == http.MethodPost:
+		s.handleLogout(w, r)
+	default:
+		http.Error(w, "not found", http.StatusNotFound)
+	}
+}
+
 func (s *server) handleProjectActions(w http.ResponseWriter, r *http.Request) {
 	trimmed := strings.TrimPrefix(r.URL.Path, "/api/projects/")
 	idStr := strings.Trim(strings.TrimSuffix(trimmed, "/"), " ")
@@ -429,9 +734,14 @@ func (s *server) createProjectHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, p)
 }
 
-func (s *server) deleteProjectHandler(w http.ResponseWriter, _ *http.Request, id int64) {
+func (s *server) deleteProjectHandler(w http.ResponseWriter, r *http.Request, id int64) {
 	if id == defaultProjectID {
 		http.Error(w, "cannot delete default project", http.StatusBadRequest)
+		return
+	}
+	u, ok := r.Context().Value(ctxUser).(user)
+	if !ok || u.Role != "admin" {
+		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	if err := s.deleteProject(id); err != nil {
@@ -594,6 +904,104 @@ func (s *server) deleteTaskHandler(w http.ResponseWriter, _ *http.Request, id in
 		http.Error(w, "failed to delete task", http.StatusInternalServerError)
 		return
 	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	payload.Email = strings.TrimSpace(strings.ToLower(payload.Email))
+	if payload.Email == "" || payload.Password == "" {
+		http.Error(w, "email and password required", http.StatusBadRequest)
+		return
+	}
+	u, err := s.getUserByEmail(payload.Email)
+	if errors.Is(err, sql.ErrNoRows) {
+		http.Error(w, "invalid credentials", http.StatusUnauthorized)
+		return
+	}
+	if err != nil {
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(u.Password), []byte(payload.Password)); err != nil {
+		http.Error(w, "invalid credentials", http.StatusUnauthorized)
+		return
+	}
+	if u.Role == "blocked" {
+		http.Error(w, "account blocked", http.StatusForbidden)
+		return
+	}
+	token := createToken(u, s.authSecret)
+	setAuthCookie(w, token)
+	writeJSON(w, struct {
+		ID    int64  `json:"id"`
+		Email string `json:"email"`
+		Role  string `json:"role"`
+	}{ID: u.ID, Email: u.Email, Role: u.Role})
+}
+
+func (s *server) handleRegister(w http.ResponseWriter, r *http.Request) {
+	if !s.allowRegistration {
+		http.Error(w, "registration disabled", http.StatusForbidden)
+		return
+	}
+	var payload struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	payload.Email = strings.TrimSpace(strings.ToLower(payload.Email))
+	if payload.Email == "" || payload.Password == "" {
+		http.Error(w, "email and password required", http.StatusBadRequest)
+		return
+	}
+	if len(payload.Password) < 6 {
+		http.Error(w, "password too short", http.StatusBadRequest)
+		return
+	}
+	u, err := s.createUser(payload.Email, payload.Password, "user")
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "unique") {
+			http.Error(w, "email already registered", http.StatusBadRequest)
+			return
+		}
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+	token := createToken(u, s.authSecret)
+	setAuthCookie(w, token)
+	writeJSON(w, struct {
+		ID    int64  `json:"id"`
+		Email string `json:"email"`
+		Role  string `json:"role"`
+	}{ID: u.ID, Email: u.Email, Role: u.Role})
+}
+
+func (s *server) handleMe(w http.ResponseWriter, r *http.Request) {
+	u, err := s.authenticate(r)
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	writeJSON(w, struct {
+		ID    int64  `json:"id"`
+		Email string `json:"email"`
+		Role  string `json:"role"`
+	}{ID: u.ID, Email: u.Email, Role: u.Role})
+}
+
+func (s *server) handleLogout(w http.ResponseWriter, _ *http.Request) {
+	clearAuthCookie(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 

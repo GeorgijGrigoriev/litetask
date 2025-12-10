@@ -54,6 +54,11 @@
   margin-top: 8px;
 }
 
+.auth-card {
+  max-width: 420px;
+  margin: 40px auto;
+}
+
 .status-column {
   height: 100%;
   border-radius: 12px;
@@ -125,6 +130,15 @@
   justify-content: center;
   align-items: center;
   height: 260px;
+}
+
+.auth-error {
+  color: #dc2626;
+  margin-bottom: 8px;
+}
+
+.user-email {
+  color: #e2e8f0;
 }
 
 @media (max-width: 640px) {
