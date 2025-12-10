@@ -1,0 +1,7 @@
+.git
+tasks.db
+web/node_modules
+web/dist
+**/*.log
+.gocache
+.DS_Store
