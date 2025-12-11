@@ -267,6 +267,7 @@ function App() {
   const [updatingProjectsId, setUpdatingProjectsId] = useState<number | null>(
     null,
   );
+  const [creatingUser, setCreatingUser] = useState(false);
 
   const fetchMe = async () => {
     try {
@@ -657,6 +658,32 @@ function App() {
     }
   };
 
+  const handleCreateUser = async (values: {
+    email: string;
+    password: string;
+    role: User["role"];
+  }) => {
+    setCreatingUser(true);
+    try {
+      const response = await api.post<User>("/users", values);
+      setUsers((prev) => [response.data, ...prev]);
+      message.success("Пользователь создан");
+    } catch (error) {
+      console.error(error);
+      if (axios.isAxiosError(error) && error.response?.data) {
+        const errMsg =
+          typeof error.response.data === "string"
+            ? error.response.data
+            : "Не удалось создать пользователя";
+        message.error(errMsg);
+      } else {
+        message.error("Не удалось создать пользователя");
+      }
+    } finally {
+      setCreatingUser(false);
+    }
+  };
+
   const openPasswordModal = (user: User) => {
     setPasswordModalUser(user);
     setNewPassword("");
@@ -822,6 +849,48 @@ function App() {
               </Space>
             </Card>
             <Card className="create-card" title="Пользователи">
+              <Form
+                layout="inline"
+                onFinish={handleCreateUser}
+                style={{ marginBottom: 12 }}
+                initialValues={{ role: "user" }}
+              >
+                <Form.Item
+                  name="email"
+                  rules={[
+                    { required: true, type: "email", message: "Введите email" },
+                  ]}
+                >
+                  <Input placeholder="email@example.com" />
+                </Form.Item>
+                <Form.Item
+                  name="password"
+                  rules={[
+                    { required: true, min: 6, message: "Минимум 6 символов" },
+                  ]}
+                >
+                  <Input.Password placeholder="Пароль" />
+                </Form.Item>
+                <Form.Item name="role" rules={[{ required: true }]}>
+                  <Select
+                    style={{ width: 140 }}
+                    options={[
+                      { label: "Пользователь", value: "user" },
+                      { label: "Админ", value: "admin" },
+                      { label: "Заблокирован", value: "blocked" },
+                    ]}
+                  />
+                </Form.Item>
+                <Form.Item>
+                  <Button
+                    type="primary"
+                    htmlType="submit"
+                    loading={creatingUser}
+                  >
+                    Добавить пользователя
+                  </Button>
+                </Form.Item>
+              </Form>
               <Button
                 onClick={() => void loadUsers()}
                 style={{ marginBottom: 12 }}

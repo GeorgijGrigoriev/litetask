@@ -196,31 +196,76 @@ func (s *Server) handleAuthRoutes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	users, err := s.store.ListUsers()
-	if err != nil {
-		http.Error(w, "failed to load users", http.StatusInternalServerError)
-		return
-	}
-	trimmed := make([]struct {
-		ID         int64   `json:"id"`
-		Email      string  `json:"email"`
-		Role       string  `json:"role"`
-		ProjectIDs []int64 `json:"projectIds"`
-	}, len(users))
-	for i, u := range users {
-		projects, _ := s.store.GetUserProjects(u.ID)
-		trimmed[i] = struct {
+	switch r.Method {
+	case http.MethodGet:
+		users, err := s.store.ListUsers()
+		if err != nil {
+			http.Error(w, "failed to load users", http.StatusInternalServerError)
+			return
+		}
+		trimmed := make([]struct {
 			ID         int64   `json:"id"`
 			Email      string  `json:"email"`
 			Role       string  `json:"role"`
 			ProjectIDs []int64 `json:"projectIds"`
-		}{ID: u.ID, Email: u.Email, Role: u.Role, ProjectIDs: projects}
+		}, len(users))
+		for i, u := range users {
+			projects, _ := s.store.GetUserProjects(u.ID)
+			trimmed[i] = struct {
+				ID         int64   `json:"id"`
+				Email      string  `json:"email"`
+				Role       string  `json:"role"`
+				ProjectIDs []int64 `json:"projectIds"`
+			}{ID: u.ID, Email: u.Email, Role: u.Role, ProjectIDs: projects}
+		}
+		writeJSON(w, trimmed)
+	case http.MethodPost:
+		var payload struct {
+			Email    string `json:"email"`
+			Password string `json:"password"`
+			Role     string `json:"role"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		payload.Email = strings.ToLower(strings.TrimSpace(payload.Email))
+		payload.Password = strings.TrimSpace(payload.Password)
+		payload.Role = strings.TrimSpace(strings.ToLower(payload.Role))
+		if payload.Email == "" || payload.Password == "" {
+			http.Error(w, "email and password required", http.StatusBadRequest)
+			return
+		}
+		if len(payload.Password) < 6 {
+			http.Error(w, "password too short", http.StatusBadRequest)
+			return
+		}
+		if payload.Role == "" {
+			payload.Role = "user"
+		}
+		if payload.Role != "user" && payload.Role != "admin" && payload.Role != "blocked" {
+			http.Error(w, "invalid role", http.StatusBadRequest)
+			return
+		}
+		u, err := s.store.CreateUser(payload.Email, payload.Password, payload.Role)
+		if err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "unique") {
+				http.Error(w, "email already registered", http.StatusBadRequest)
+				return
+			}
+			http.Error(w, "failed to create user", http.StatusInternalServerError)
+			return
+		}
+		projects, _ := s.store.GetUserProjects(u.ID)
+		writeJSON(w, struct {
+			ID         int64   `json:"id"`
+			Email      string  `json:"email"`
+			Role       string  `json:"role"`
+			ProjectIDs []int64 `json:"projectIds"`
+		}{ID: u.ID, Email: u.Email, Role: u.Role, ProjectIDs: projects})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
-	writeJSON(w, trimmed)
 }
 
 func (s *Server) handleUserActions(w http.ResponseWriter, r *http.Request) {
