@@ -22,6 +22,7 @@ import {
   Row,
   Select,
   Space,
+  Badge,
   Spin,
   Table,
   Tag,
@@ -213,6 +214,10 @@ function App() {
   );
   const [creatingUser, setCreatingUser] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
+  const [taskModalOpen, setTaskModalOpen] = useState(false);
+  const [projectTaskCounts, setProjectTaskCounts] = useState<
+    Record<number, number>
+  >({});
 
   const fetchMe = async () => {
     try {
@@ -315,6 +320,12 @@ function App() {
         comments: task.comments ?? [],
       }));
       setTasks(normalized);
+      if (projectId) {
+        setProjectTaskCounts((prev) => ({
+          ...prev,
+          [projectId]: normalized.length,
+        }));
+      }
       if (
         selectedTaskId &&
         !normalized.some((task) => task.id === selectedTaskId)
@@ -371,6 +382,25 @@ function App() {
   }, [selectedProject, user]);
 
   useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (activePage !== "board" || !selectedProject || !user) {
+        return;
+      }
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) {
+        return;
+      }
+      if ((e.altKey || e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "n") {
+        e.preventDefault();
+        setTaskModalOpen(true);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [activePage, selectedProject, user]);
+
+  useEffect(() => {
     if (activePage === "settings" && user?.role === "admin") {
       void loadUsers();
     }
@@ -402,6 +432,7 @@ function App() {
       ]);
       setTitle("");
       setDescription("");
+      setTaskModalOpen(false);
       message.success("Задача создана");
     } catch (error) {
       console.error(error);
@@ -1082,7 +1113,19 @@ function App() {
           </>
         ) : (
           <>
-            <Card className="project-card" title="Проекты">
+            <Card className="project-card project-card--compact">
+              <div className="project-card-header">
+                <Button
+                  type="primary"
+                  icon={<PlusOutlined />}
+                  onClick={() => setTaskModalOpen(true)}
+                  disabled={!selectedProject}
+                  title="Alt+N / ⌘+N"
+                >
+                  Добавить задачу
+                </Button>
+                <div className="project-card-title">Проекты</div>
+              </div>
               {projects.length === 0 && !loadingProjects ? (
                 <Empty description="Нет проектов. Создайте их в настройках" />
               ) : (
@@ -1093,46 +1136,24 @@ function App() {
                   onChange={(key) => handleProjectChange(Number(key))}
                   items={projects.map((p) => ({
                     key: String(p.id),
-                    label: p.name,
+                    label: (
+                      <Space size={6}>
+                        <span>{p.name}</span>
+                        <Badge
+                          count={
+                            projectTaskCounts[p.id] !== undefined
+                              ? projectTaskCounts[p.id]
+                              : "?"
+                          }
+                          overflowCount={99}
+                          size="small"
+                        />
+                      </Space>
+                    ),
                   }))}
                 />
               )}
             </Card>
-
-            {projects.length > 0 && (
-              <Card className="create-card" title="Добавить задачу">
-                <Space
-                  direction="vertical"
-                  size="small"
-                  className="create-column"
-                >
-                  <Space.Compact className="create-row">
-                    <Input
-                      placeholder="Новая задача..."
-                      value={title}
-                      onChange={(e) => setTitle(e.target.value)}
-                      onPressEnter={handleCreate}
-                      maxLength={140}
-                    />
-                    <Button
-                      type="primary"
-                      icon={<PlusOutlined />}
-                      onClick={handleCreate}
-                      loading={creating}
-                      disabled={!selectedProject}
-                    >
-                      Добавить
-                    </Button>
-                  </Space.Compact>
-                  <Input.TextArea
-                    placeholder="Описание задачи (необязательно)"
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    autoSize={{ minRows: 2, maxRows: 4 }}
-                  />
-                </Space>
-              </Card>
-            )}
 
             {projects.length === 0 && !loadingProjects ? (
               <Empty description="Создайте проект, чтобы начать" />
@@ -1352,6 +1373,32 @@ function App() {
           </>
         )}
       </Layout.Content>
+      <Modal
+        title="Новая задача"
+        open={taskModalOpen}
+        onCancel={() => setTaskModalOpen(false)}
+        onOk={handleCreate}
+        okButtonProps={{ loading: creating, disabled: !selectedProject }}
+        cancelText="Отмена"
+        okText="Создать"
+      >
+        <Space direction="vertical" size="small" className="create-column">
+          <Input
+            placeholder="Новая задача"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            onPressEnter={handleCreate}
+            maxLength={140}
+          />
+          <Input.TextArea
+            placeholder="Описание задачи (необязательно)"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            autoSize={{ minRows: 3, maxRows: 5 }}
+          />
+        </Space>
+      </Modal>
+
       <Modal
         title={
           passwordModalUser

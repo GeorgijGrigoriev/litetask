@@ -42,6 +42,24 @@
     margin-bottom: 16px;
 }
 
+.project-card--compact .ant-card-body {
+    padding-top: 12px;
+}
+
+.project-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+    gap: 12px;
+}
+
+.project-card-title {
+    font-weight: 600;
+    color: #0f172a;
+    font-size: 16px;
+}
+
 .project-row {
     width: 100%;
     justify-content: space-between;
