@@ -76,6 +76,7 @@ type User struct {
 	Email     string    `json:"email"`
 	Password  string    `json:"-"`
 	Role      string    `json:"role"`
+	Telegram  string    `json:"telegram"`
 	CreatedAt time.Time `json:"createdAt"`
 }
 
@@ -329,13 +330,13 @@ func (s *Store) CreateUser(email, password, role string) (User, error) {
 	if err != nil {
 		return u, err
 	}
-	res, err := s.db.Exec(`INSERT INTO users (email, password_hash, role) VALUES (?, ?, ?)`, email, string(hash), role)
+	res, err := s.db.Exec(`INSERT INTO users (email, password_hash, role, telegram) VALUES (?, ?, ?, '')`, email, string(hash), role)
 	if err != nil {
 		return u, err
 	}
 	id, _ := res.LastInsertId()
-	err = s.db.QueryRow(`SELECT id, email, password_hash, role, created_at FROM users WHERE id = ?`, id).
-		Scan(&u.ID, &u.Email, &u.Password, &u.Role, &u.CreatedAt)
+	err = s.db.QueryRow(`SELECT id, email, password_hash, role, created_at, telegram FROM users WHERE id = ?`, id).
+		Scan(&u.ID, &u.Email, &u.Password, &u.Role, &u.CreatedAt, &u.Telegram)
 	if err != nil {
 		return u, err
 	}
@@ -348,8 +349,8 @@ func (s *Store) CreateUser(email, password, role string) (User, error) {
 
 func (s *Store) GetUserByEmail(email string) (User, error) {
 	var u User
-	err := s.db.QueryRow(`SELECT id, email, password_hash, role, created_at FROM users WHERE email = ?`, email).
-		Scan(&u.ID, &u.Email, &u.Password, &u.Role, &u.CreatedAt)
+	err := s.db.QueryRow(`SELECT id, email, password_hash, role, created_at, telegram FROM users WHERE email = ?`, email).
+		Scan(&u.ID, &u.Email, &u.Password, &u.Role, &u.CreatedAt, &u.Telegram)
 	if err != nil {
 		return u, err
 	}
@@ -359,8 +360,8 @@ func (s *Store) GetUserByEmail(email string) (User, error) {
 
 func (s *Store) GetUserByID(id int64) (User, error) {
 	var u User
-	err := s.db.QueryRow(`SELECT id, email, password_hash, role, created_at FROM users WHERE id = ?`, id).
-		Scan(&u.ID, &u.Email, &u.Password, &u.Role, &u.CreatedAt)
+	err := s.db.QueryRow(`SELECT id, email, password_hash, role, created_at, telegram FROM users WHERE id = ?`, id).
+		Scan(&u.ID, &u.Email, &u.Password, &u.Role, &u.CreatedAt, &u.Telegram)
 	if err != nil {
 		return u, err
 	}
@@ -369,7 +370,7 @@ func (s *Store) GetUserByID(id int64) (User, error) {
 }
 
 func (s *Store) ListUsers() ([]User, error) {
-	rows, err := s.db.Query(`SELECT id, email, password_hash, role, created_at FROM users ORDER BY created_at DESC`)
+	rows, err := s.db.Query(`SELECT id, email, password_hash, role, created_at, telegram FROM users ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -377,7 +378,7 @@ func (s *Store) ListUsers() ([]User, error) {
 	users := make([]User, 0)
 	for rows.Next() {
 		var u User
-		if err := rows.Scan(&u.ID, &u.Email, &u.Password, &u.Role, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Email, &u.Password, &u.Role, &u.CreatedAt, &u.Telegram); err != nil {
 			return nil, err
 		}
 		u.CreatedAt = u.CreatedAt.UTC()
@@ -433,6 +434,44 @@ func (s *Store) UpdateUserPassword(id int64, password string) (User, error) {
 		return User{}, err
 	}
 	res, err := s.db.Exec(`UPDATE users SET password_hash = ? WHERE id = ?`, string(hash), id)
+	if err != nil {
+		return User{}, err
+	}
+	affected, _ := res.RowsAffected()
+	if affected == 0 {
+		return User{}, sql.ErrNoRows
+	}
+	return s.GetUserByID(id)
+}
+
+func (s *Store) UpdateUserProfile(id int64, password *string, telegram *string) (User, error) {
+	if password == nil && telegram == nil {
+		return s.GetUserByID(id)
+	}
+	sets := make([]string, 0)
+	args := make([]any, 0)
+
+	if password != nil {
+		if len(*password) < 6 {
+			return User{}, errors.New("password too short")
+		}
+		hash, err := bcrypt.GenerateFromPassword([]byte(*password), bcrypt.DefaultCost)
+		if err != nil {
+			return User{}, err
+		}
+		sets = append(sets, "password_hash = ?")
+		args = append(args, string(hash))
+	}
+
+	if telegram != nil {
+		sets = append(sets, "telegram = ?")
+		args = append(args, strings.TrimSpace(*telegram))
+	}
+
+	args = append(args, id)
+
+	query := `UPDATE users SET ` + strings.Join(sets, ", ") + ` WHERE id = ?`
+	res, err := s.db.Exec(query, args...)
 	if err != nil {
 		return User{}, err
 	}
@@ -703,6 +742,7 @@ CREATE TABLE IF NOT EXISTS users (
 	email TEXT NOT NULL UNIQUE,
 	password_hash TEXT NOT NULL,
 	role TEXT NOT NULL DEFAULT 'user',
+	telegram TEXT NOT NULL DEFAULT '',
 	created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS tasks (
@@ -760,6 +800,11 @@ CREATE TABLE IF NOT EXISTS user_projects (
 	if _, err := db.Exec(`ALTER TABLE tasks ADD COLUMN created_by INTEGER`); err != nil {
 		if !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
 			log.Printf("warning: unable to add created_by column: %v", err)
+		}
+	}
+	if _, err := db.Exec(`ALTER TABLE users ADD COLUMN telegram TEXT NOT NULL DEFAULT ''`); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+			log.Printf("warning: unable to add telegram column: %v", err)
 		}
 	}
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS task_comments (

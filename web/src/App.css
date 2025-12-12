@@ -258,6 +258,16 @@
     color: #e2e8f0;
 }
 
+.settings-btn {
+    color: #fff !important;
+}
+
+.settings-btn:hover,
+.settings-btn:focus {
+    color: #e2e8f0 !important;
+    background: rgba(255, 255, 255, 0.08);
+}
+
 @media (max-width: 640px) {
     .project-row {
         flex-direction: column;

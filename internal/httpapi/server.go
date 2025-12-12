@@ -71,6 +71,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/api/projects/", s.cors(s.requireUser(http.HandlerFunc(s.handleProjectActions))))
 	mux.Handle("/api/users", s.cors(s.requireAdmin(http.HandlerFunc(s.handleUsers))))
 	mux.Handle("/api/users/", s.cors(s.requireAdmin(http.HandlerFunc(s.handleUserActions))))
+	mux.Handle("/api/profile", s.cors(s.requireUser(http.HandlerFunc(s.handleProfile))))
 	mux.Handle("/", s.staticHandler())
 	return mux
 }
@@ -852,10 +853,16 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	token := createToken(u, s.authSecret)
 	setAuthCookie(w, token)
 	writeJSON(w, struct {
-		ID    int64  `json:"id"`
-		Email string `json:"email"`
-		Role  string `json:"role"`
-	}{ID: u.ID, Email: u.Email, Role: u.Role})
+		ID       int64  `json:"id"`
+		Email    string `json:"email"`
+		Role     string `json:"role"`
+		Telegram string `json:"telegram"`
+	}{
+		ID:       u.ID,
+		Email:    u.Email,
+		Role:     u.Role,
+		Telegram: u.Telegram,
+	})
 }
 
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
@@ -892,10 +899,16 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	token := createToken(u, s.authSecret)
 	setAuthCookie(w, token)
 	writeJSON(w, struct {
-		ID    int64  `json:"id"`
-		Email string `json:"email"`
-		Role  string `json:"role"`
-	}{ID: u.ID, Email: u.Email, Role: u.Role})
+		ID       int64  `json:"id"`
+		Email    string `json:"email"`
+		Role     string `json:"role"`
+		Telegram string `json:"telegram"`
+	}{
+		ID:       u.ID,
+		Email:    u.Email,
+		Role:     u.Role,
+		Telegram: u.Telegram,
+	})
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
@@ -905,15 +918,87 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, struct {
-		ID    int64  `json:"id"`
-		Email string `json:"email"`
-		Role  string `json:"role"`
-	}{ID: u.ID, Email: u.Email, Role: u.Role})
+		ID       int64  `json:"id"`
+		Email    string `json:"email"`
+		Role     string `json:"role"`
+		Telegram string `json:"telegram"`
+	}{
+		ID:       u.ID,
+		Email:    u.Email,
+		Role:     u.Role,
+		Telegram: u.Telegram,
+	})
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, _ *http.Request) {
 	clearAuthCookie(w)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
+	u, err := s.authenticate(r)
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, struct {
+			ID       int64  `json:"id"`
+			Email    string `json:"email"`
+			Role     string `json:"role"`
+			Telegram string `json:"telegram"`
+		}{
+			ID:       u.ID,
+			Email:    u.Email,
+			Role:     u.Role,
+			Telegram: u.Telegram,
+		})
+	case http.MethodPatch:
+		var payload struct {
+			Password *string `json:"password"`
+			Telegram *string `json:"telegram"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		if payload.Password == nil && payload.Telegram == nil {
+			http.Error(w, "nothing to update", http.StatusBadRequest)
+			return
+		}
+		if payload.Telegram != nil {
+			trimmed := strings.TrimSpace(*payload.Telegram)
+			payload.Telegram = &trimmed
+		}
+		updated, err := s.store.UpdateUserProfile(u.ID, payload.Password, payload.Telegram)
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "user not found", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			if err.Error() == "password too short" {
+				http.Error(w, "password too short", http.StatusBadRequest)
+				return
+			}
+			http.Error(w, "failed to update profile", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, struct {
+			ID       int64  `json:"id"`
+			Email    string `json:"email"`
+			Role     string `json:"role"`
+			Telegram string `json:"telegram"`
+		}{
+			ID:       updated.ID,
+			Email:    updated.Email,
+			Role:     updated.Role,
+			Telegram: updated.Telegram,
+		})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 func (s *Server) authenticate(r *http.Request) (store.User, error) {

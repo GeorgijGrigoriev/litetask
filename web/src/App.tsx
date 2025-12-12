@@ -8,6 +8,7 @@ import {
   PlusOutlined,
   ReloadOutlined,
   ArrowLeftOutlined,
+  SettingOutlined,
 } from "@ant-design/icons";
 import {
   Button,
@@ -67,6 +68,7 @@ type User = {
   email: string;
   role: "admin" | "user" | "blocked";
   projectIds?: number[];
+  telegram?: string;
 };
 
 const statusOrder: StatusKey[] = ["new", "in_progress", "done"];
@@ -218,6 +220,9 @@ function App() {
   const [projectTaskCounts, setProjectTaskCounts] = useState<
     Record<number, number>
   >({});
+  const [profileModalOpen, setProfileModalOpen] = useState(false);
+  const [profilePassword, setProfilePassword] = useState("");
+  const [profileTelegram, setProfileTelegram] = useState("");
 
   const fetchMe = async () => {
     try {
@@ -286,6 +291,9 @@ function App() {
     setAddingComment(false);
     setEditingId(null);
     setSelectedTaskId(null);
+    setProfileModalOpen(false);
+    setProfilePassword("");
+    setProfileTelegram("");
   };
 
   const grouped = useMemo(() => {
@@ -612,6 +620,39 @@ function App() {
     }
   };
 
+  const handleUpdateProfile = async () => {
+    if (!user) return;
+    const payload: { password?: string; telegram?: string } = {
+      telegram: profileTelegram,
+    };
+    if (profilePassword.trim()) {
+      payload.password = profilePassword.trim();
+      if (payload.password.length < 6) {
+        message.error("Пароль должен быть не меньше 6 символов");
+        return;
+      }
+    }
+    try {
+      const response = await api.patch<User>("/profile", payload);
+      setUser(response.data);
+      setProfilePassword("");
+      setProfileTelegram(response.data.telegram ?? "");
+      message.success("Профиль обновлен");
+      setProfileModalOpen(false);
+    } catch (error) {
+      console.error(error);
+      if (axios.isAxiosError(error) && error.response?.data) {
+        const errMsg =
+          typeof error.response.data === "string"
+            ? error.response.data
+            : "Не удалось обновить профиль";
+        message.error(errMsg);
+      } else {
+        message.error("Не удалось обновить профиль");
+      }
+    }
+  };
+
   const handleProjectChange = (projectId: number) => {
     setSelectedProject(projectId);
     setSelectedTaskId(null);
@@ -898,7 +939,20 @@ function App() {
           <Tag color={user.role === "admin" ? "green" : "blue"}>
             {user.role === "admin" ? "Админ" : "Пользователь"}
           </Tag>
-          <span className="user-email">{user.email}</span>
+          <Space size={4} className="user-email">
+            <span>{user.email}</span>
+            <Button
+              icon={<SettingOutlined />}
+              type="text"
+              className="settings-btn"
+              onClick={() => {
+                setProfileTelegram(user.telegram ?? "");
+                setProfilePassword("");
+                setProfileModalOpen(true);
+              }}
+              title="Настройки профиля"
+            />
+          </Space>
           <Button
             type="default"
             icon={<ReloadOutlined />}
@@ -1373,6 +1427,39 @@ function App() {
           </>
         )}
       </Layout.Content>
+      <Modal
+        title="Настройки профиля"
+        open={profileModalOpen}
+        onCancel={() => setProfileModalOpen(false)}
+        onOk={() => void handleUpdateProfile()}
+        okText="Сохранить"
+        cancelText="Отмена"
+      >
+        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+          <div className="meta-row">
+            <span className="meta-label">Email:</span>
+            <span className="meta-value">{user.email}</span>
+          </div>
+          <div className="meta-row">
+            <span className="meta-label">Telegram:</span>
+            <Input
+              placeholder="Telegram (@username)"
+              value={profileTelegram}
+              onChange={(e) => setProfileTelegram(e.target.value)}
+            />
+          </div>
+          <hr />
+          <h5>Смена пароля</h5>
+          <Input.Password
+            placeholder="Новый пароль (опционально)"
+            value={profilePassword}
+            onChange={(e) => setProfilePassword(e.target.value)}
+          />
+          <div className="muted-text">
+            Пароль минимум 6 символов. Оставьте пустым, если не хотите менять.
+          </div>
+        </Space>
+      </Modal>
       <Modal
         title="Новая задача"
         open={taskModalOpen}
