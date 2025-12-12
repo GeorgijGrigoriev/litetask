@@ -77,7 +77,7 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 	case "/start", "/help":
 		reply := "LiteTask бот\n\n" +
 			"Команды:\n" +
-			"/new [projectId] <название> |комментарий — создать задачу в проекте (по умолчанию Общий)\n" +
+			"/new [projectId] <название> |описание — создать задачу в проекте (по умолчанию Общий)\n" +
 			"/status <id> <new|in_progress|done> — сменить статус\n" +
 			"/list [projectId] [all] — показать задачи (по умолчанию новые задачи в Общем, all — все статусы, projectId=all — все проекты)\n" +
 			"/projects — список проектов\n" +
@@ -94,10 +94,10 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 			}
 		}
 		if content == "" {
-			b.send("Используй: /new [projectId] <название> |комментарий (комментарий необязателен)")
+			b.send("Используй: /new [projectId] <название> |описание (описание необязательно)")
 			return
 		}
-		title, comment := parseTitleAndComment(content)
+		title, description := parseTitleAndDescription(content)
 		if title == "" {
 			b.send("Название задачи не может быть пустым")
 			return
@@ -107,7 +107,7 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 			return
 		}
 
-		t, err := b.store.InsertTask(title, comment, projectID)
+		t, err := b.store.InsertTask(title, description, projectID, 0)
 		if err != nil {
 			log.Printf("bot: failed to insert task: %v", err)
 			b.send("Не удалось создать задачу")
@@ -243,7 +243,7 @@ func splitCommand(text string) (string, string) {
 	return cmd, strings.TrimSpace(parts[1])
 }
 
-func parseTitleAndComment(input string) (string, string) {
+func parseTitleAndDescription(input string) (string, string) {
 	parts := strings.SplitN(input, "|", 2)
 	title := strings.TrimSpace(parts[0])
 	if len(parts) == 2 {

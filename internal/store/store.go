@@ -46,12 +46,23 @@ var (
 )
 
 type Task struct {
-	ID        int64     `json:"id"`
-	Title     string    `json:"title"`
-	Status    string    `json:"status"`
-	Comment   string    `json:"comment"`
-	ProjectID int64     `json:"projectId"`
-	CreatedAt time.Time `json:"createdAt"`
+	ID          int64     `json:"id"`
+	Title       string    `json:"title"`
+	Status      string    `json:"status"`
+	Description string    `json:"description"`
+	ProjectID   int64     `json:"projectId"`
+	CreatedAt   time.Time `json:"createdAt"`
+	CreatedBy   int64     `json:"createdBy"`
+	AuthorEmail string    `json:"authorEmail"`
+}
+
+type TaskComment struct {
+	ID          int64     `json:"id"`
+	TaskID      int64     `json:"taskId"`
+	Body        string    `json:"body"`
+	AuthorID    int64     `json:"authorId,omitempty"`
+	AuthorEmail string    `json:"authorEmail"`
+	CreatedAt   time.Time `json:"createdAt"`
 }
 
 type Project struct {
@@ -101,7 +112,7 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-func (s *Store) InsertTask(title, comment string, projectID int64) (Task, error) {
+func (s *Store) InsertTask(title, description string, projectID, createdBy int64) (Task, error) {
 	var t Task
 	ok, err := s.ProjectExists(projectID)
 	if err != nil {
@@ -111,17 +122,36 @@ func (s *Store) InsertTask(title, comment string, projectID int64) (Task, error)
 		return t, fmt.Errorf("project not found")
 	}
 
-	res, err := s.db.Exec(`INSERT INTO tasks (title, status, comment, project_id) VALUES (?, 'new', ?, ?)`, title, comment, projectID)
+	res, err := s.db.Exec(
+		`INSERT INTO tasks (title, status, description, project_id, created_by) VALUES (?, 'new', ?, ?, ?)`,
+		title,
+		description,
+		projectID,
+		nullableInt64(createdBy),
+	)
 	if err != nil {
 		return t, err
 	}
 	id, _ := res.LastInsertId()
-	err = s.db.QueryRow(`SELECT id, title, status, comment, project_id, created_at FROM tasks WHERE id = ?`, id).
-		Scan(&t.ID, &t.Title, &t.Status, &t.Comment, &t.ProjectID, &t.CreatedAt)
+	var created sql.NullInt64
+	var email sql.NullString
+	err = s.db.QueryRow(
+		`SELECT t.id, t.title, t.status, COALESCE(t.description, t.comment, ''), t.project_id, t.created_at, t.created_by, u.email
+		FROM tasks t
+		LEFT JOIN users u ON t.created_by = u.id
+		WHERE t.id = ?`,
+		id,
+	).Scan(&t.ID, &t.Title, &t.Status, &t.Description, &t.ProjectID, &t.CreatedAt, &created, &email)
 	if err != nil {
 		return t, err
 	}
 	t.CreatedAt = t.CreatedAt.UTC()
+	if created.Valid {
+		t.CreatedBy = created.Int64
+	}
+	if email.Valid {
+		t.AuthorEmail = email.String
+	}
 	return t, nil
 }
 
@@ -140,18 +170,31 @@ func (s *Store) SetTaskStatus(id int64, status string) (Task, error) {
 		return t, sql.ErrNoRows
 	}
 
-	err = s.db.QueryRow(`SELECT id, title, status, comment, project_id, created_at FROM tasks WHERE id = ?`, id).
-		Scan(&t.ID, &t.Title, &t.Status, &t.Comment, &t.ProjectID, &t.CreatedAt)
+	var created sql.NullInt64
+	var email sql.NullString
+	err = s.db.QueryRow(
+		`SELECT t.id, t.title, t.status, COALESCE(t.description, t.comment, ''), t.project_id, t.created_at, t.created_by, u.email
+		FROM tasks t
+		LEFT JOIN users u ON t.created_by = u.id
+		WHERE t.id = ?`,
+		id,
+	).Scan(&t.ID, &t.Title, &t.Status, &t.Description, &t.ProjectID, &t.CreatedAt, &created, &email)
 	if err != nil {
 		return t, err
 	}
 	t.CreatedAt = t.CreatedAt.UTC()
+	if created.Valid {
+		t.CreatedBy = created.Int64
+	}
+	if email.Valid {
+		t.AuthorEmail = email.String
+	}
 	return t, nil
 }
 
-func (s *Store) SetTaskComment(id int64, comment string) (Task, error) {
+func (s *Store) SetTaskDescription(id int64, description string) (Task, error) {
 	var t Task
-	res, err := s.db.Exec(`UPDATE tasks SET comment = ? WHERE id = ?`, comment, id)
+	res, err := s.db.Exec(`UPDATE tasks SET description = ? WHERE id = ?`, description, id)
 	if err != nil {
 		return t, err
 	}
@@ -159,12 +202,25 @@ func (s *Store) SetTaskComment(id int64, comment string) (Task, error) {
 	if affected == 0 {
 		return t, sql.ErrNoRows
 	}
-	err = s.db.QueryRow(`SELECT id, title, status, comment, project_id, created_at FROM tasks WHERE id = ?`, id).
-		Scan(&t.ID, &t.Title, &t.Status, &t.Comment, &t.ProjectID, &t.CreatedAt)
+	var created sql.NullInt64
+	var email sql.NullString
+	err = s.db.QueryRow(
+		`SELECT t.id, t.title, t.status, COALESCE(t.description, t.comment, ''), t.project_id, t.created_at, t.created_by, u.email
+		FROM tasks t
+		LEFT JOIN users u ON t.created_by = u.id
+		WHERE t.id = ?`,
+		id,
+	).Scan(&t.ID, &t.Title, &t.Status, &t.Description, &t.ProjectID, &t.CreatedAt, &created, &email)
 	if err != nil {
 		return t, err
 	}
 	t.CreatedAt = t.CreatedAt.UTC()
+	if created.Valid {
+		t.CreatedBy = created.Int64
+	}
+	if email.Valid {
+		t.AuthorEmail = email.String
+	}
 	return t, nil
 }
 
@@ -188,12 +244,25 @@ func (s *Store) ProjectExists(id int64) (bool, error) {
 
 func (s *Store) GetTask(id int64) (Task, error) {
 	var t Task
-	err := s.db.QueryRow(`SELECT id, title, status, comment, project_id, created_at FROM tasks WHERE id = ?`, id).
-		Scan(&t.ID, &t.Title, &t.Status, &t.Comment, &t.ProjectID, &t.CreatedAt)
+	var created sql.NullInt64
+	var email sql.NullString
+	err := s.db.QueryRow(
+		`SELECT t.id, t.title, t.status, COALESCE(t.description, t.comment, ''), t.project_id, t.created_at, t.created_by, u.email
+		FROM tasks t
+		LEFT JOIN users u ON t.created_by = u.id
+		WHERE t.id = ?`,
+		id,
+	).Scan(&t.ID, &t.Title, &t.Status, &t.Description, &t.ProjectID, &t.CreatedAt, &created, &email)
 	if err != nil {
 		return t, err
 	}
 	t.CreatedAt = t.CreatedAt.UTC()
+	if created.Valid {
+		t.CreatedBy = created.Int64
+	}
+	if email.Valid {
+		t.AuthorEmail = email.String
+	}
 	return t, nil
 }
 
@@ -426,12 +495,12 @@ func (s *Store) projectExistsTx(tx *sql.Tx, id int64) (bool, error) {
 }
 
 func (s *Store) FetchTasks(projectID int64, status string, allowed map[int64]struct{}) ([]Task, error) {
-	query := `SELECT id, title, status, comment, project_id, created_at FROM tasks`
+	query := `SELECT t.id, t.title, t.status, COALESCE(t.description, t.comment, ''), t.project_id, t.created_at, t.created_by, u.email FROM tasks t LEFT JOIN users u ON t.created_by = u.id`
 	conds := make([]string, 0)
 	args := make([]any, 0)
 
 	if projectID > 0 {
-		conds = append(conds, "project_id = ?")
+		conds = append(conds, "t.project_id = ?")
 		args = append(args, projectID)
 	}
 	if len(allowed) > 0 {
@@ -440,16 +509,16 @@ func (s *Store) FetchTasks(projectID int64, status string, allowed map[int64]str
 			placeholders = append(placeholders, "?")
 			args = append(args, pid)
 		}
-		conds = append(conds, "project_id IN ("+strings.Join(placeholders, ",")+")")
+		conds = append(conds, "t.project_id IN ("+strings.Join(placeholders, ",")+")")
 	}
 	if status != "" {
-		conds = append(conds, "status = ?")
+		conds = append(conds, "t.status = ?")
 		args = append(args, status)
 	}
 	if len(conds) > 0 {
 		query += " WHERE " + strings.Join(conds, " AND ")
 	}
-	query += " ORDER BY created_at DESC"
+	query += " ORDER BY t.created_at DESC"
 
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
@@ -461,13 +530,142 @@ func (s *Store) FetchTasks(projectID int64, status string, allowed map[int64]str
 	for rows.Next() {
 		var t Task
 		var created time.Time
-		if err := rows.Scan(&t.ID, &t.Title, &t.Status, &t.Comment, &t.ProjectID, &created); err != nil {
+		var authorID sql.NullInt64
+		var email sql.NullString
+		if err := rows.Scan(&t.ID, &t.Title, &t.Status, &t.Description, &t.ProjectID, &created, &authorID, &email); err != nil {
 			return nil, err
 		}
 		t.CreatedAt = created.UTC()
+		if authorID.Valid {
+			t.CreatedBy = authorID.Int64
+		}
+		if email.Valid {
+			t.AuthorEmail = email.String
+		}
 		tasks = append(tasks, t)
 	}
 	return tasks, nil
+}
+
+func (s *Store) AddTaskComment(taskID int64, body string, authorID int64) (TaskComment, error) {
+	var c TaskComment
+	res, err := s.db.Exec(
+		`INSERT INTO task_comments (task_id, body, author_id) VALUES (?, ?, ?)`,
+		taskID,
+		body,
+		nullableInt64(authorID),
+	)
+	if err != nil {
+		return c, err
+	}
+	id, _ := res.LastInsertId()
+	var created sql.NullInt64
+	var email sql.NullString
+	err = s.db.QueryRow(
+		`SELECT c.id, c.task_id, c.body, c.author_id, c.created_at, u.email
+		FROM task_comments c
+		LEFT JOIN users u ON c.author_id = u.id
+		WHERE c.id = ?`,
+		id,
+	).Scan(&c.ID, &c.TaskID, &c.Body, &created, &c.CreatedAt, &email)
+	if err != nil {
+		return c, err
+	}
+	c.CreatedAt = c.CreatedAt.UTC()
+	if created.Valid {
+		c.AuthorID = created.Int64
+	}
+	if email.Valid {
+		c.AuthorEmail = email.String
+	}
+	return c, nil
+}
+
+func (s *Store) ListTaskComments(taskID int64) ([]TaskComment, error) {
+	commentsMap, err := s.ListCommentsByTaskIDs([]int64{taskID})
+	if err != nil {
+		return nil, err
+	}
+	return commentsMap[taskID], nil
+}
+
+func (s *Store) GetTaskComment(commentID int64) (TaskComment, error) {
+	var c TaskComment
+	var author sql.NullInt64
+	var email sql.NullString
+	err := s.db.QueryRow(
+		`SELECT c.id, c.task_id, c.body, c.author_id, c.created_at, u.email
+		FROM task_comments c
+		LEFT JOIN users u ON c.author_id = u.id
+		WHERE c.id = ?`,
+		commentID,
+	).Scan(&c.ID, &c.TaskID, &c.Body, &author, &c.CreatedAt, &email)
+	if err != nil {
+		return c, err
+	}
+	c.CreatedAt = c.CreatedAt.UTC()
+	if author.Valid {
+		c.AuthorID = author.Int64
+	}
+	if email.Valid {
+		c.AuthorEmail = email.String
+	}
+	return c, nil
+}
+
+func (s *Store) DeleteTaskComment(commentID int64) error {
+	res, err := s.db.Exec(`DELETE FROM task_comments WHERE id = ?`, commentID)
+	if err != nil {
+		return err
+	}
+	affected, _ := res.RowsAffected()
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) ListCommentsByTaskIDs(taskIDs []int64) (map[int64][]TaskComment, error) {
+	result := make(map[int64][]TaskComment, len(taskIDs))
+	if len(taskIDs) == 0 {
+		return result, nil
+	}
+	placeholders := make([]string, 0, len(taskIDs))
+	args := make([]any, 0, len(taskIDs))
+	for _, id := range taskIDs {
+		placeholders = append(placeholders, "?")
+		args = append(args, id)
+	}
+	rows, err := s.db.Query(
+		`SELECT c.id, c.task_id, c.body, c.author_id, c.created_at, u.email
+		FROM task_comments c
+		LEFT JOIN users u ON c.author_id = u.id
+		WHERE c.task_id IN (`+strings.Join(placeholders, ",")+`)
+		ORDER BY c.created_at ASC, c.id ASC`,
+		args...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var c TaskComment
+		var created sql.NullInt64
+		var email sql.NullString
+		if err := rows.Scan(&c.ID, &c.TaskID, &c.Body, &created, &c.CreatedAt, &email); err != nil {
+			return nil, err
+		}
+		c.CreatedAt = c.CreatedAt.UTC()
+		if created.Valid {
+			c.AuthorID = created.Int64
+		}
+		if email.Valid {
+			c.AuthorEmail = email.String
+		}
+		result[c.TaskID] = append(result[c.TaskID], c)
+	}
+	return result, nil
 }
 
 func (s *Store) ProjectNameMap() map[int64]string {
@@ -512,10 +710,25 @@ CREATE TABLE IF NOT EXISTS tasks (
 	title TEXT NOT NULL,
 	status TEXT NOT NULL,
 	comment TEXT DEFAULT '',
+	description TEXT DEFAULT '',
 	project_id INTEGER NOT NULL DEFAULT 1,
-	created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+	created_by INTEGER,
+	created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+	FOREIGN KEY(created_by) REFERENCES users(id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
+CREATE TABLE IF NOT EXISTS task_comments (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	task_id INTEGER NOT NULL,
+	author_id INTEGER,
+	body TEXT NOT NULL,
+	created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+	FOREIGN KEY(author_id) REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_task_comments_task ON task_comments(task_id);
 CREATE TABLE IF NOT EXISTS user_projects (
 	user_id INTEGER NOT NULL,
 	project_id INTEGER NOT NULL,
@@ -539,12 +752,35 @@ CREATE TABLE IF NOT EXISTS user_projects (
 			log.Printf("warning: unable to add project_id column: %v", err)
 		}
 	}
+	if _, err := db.Exec(`ALTER TABLE tasks ADD COLUMN description TEXT DEFAULT ''`); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+			log.Printf("warning: unable to add description column: %v", err)
+		}
+	}
+	if _, err := db.Exec(`ALTER TABLE tasks ADD COLUMN created_by INTEGER`); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+			log.Printf("warning: unable to add created_by column: %v", err)
+		}
+	}
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS task_comments (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		task_id INTEGER NOT NULL,
+		author_id INTEGER,
+		body TEXT NOT NULL,
+		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+		FOREIGN KEY(author_id) REFERENCES users(id) ON DELETE SET NULL
+	)`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_task_comments_task ON task_comments(task_id)`); err != nil {
+		log.Printf("warning: unable to ensure idx_task_comments_task: %v", err)
+	}
 	if _, err := db.Exec(`UPDATE tasks SET project_id = ? WHERE project_id IS NULL OR project_id = 0`, DefaultProjectID); err != nil {
 		log.Printf("warning: unable to backfill project_id: %v", err)
 	}
-
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)`); err != nil {
-		log.Printf("warning: unable to ensure idx_tasks_project: %v", err)
+	if _, err := db.Exec(`UPDATE tasks SET description = comment WHERE (description IS NULL OR description = '') AND comment IS NOT NULL AND comment != ''`); err != nil {
+		log.Printf("warning: unable to backfill description from comment: %v", err)
 	}
 
 	return nil
@@ -616,4 +852,11 @@ func randomPassword() string {
 		return "changeme123"
 	}
 	return base64.RawStdEncoding.EncodeToString(b)
+}
+
+func nullableInt64(val int64) any {
+	if val == 0 {
+		return nil
+	}
+	return val
 }

@@ -7,6 +7,7 @@ import {
   PlayCircleOutlined,
   PlusOutlined,
   ReloadOutlined,
+  ArrowLeftOutlined,
 } from "@ant-design/icons";
 import {
   Button,
@@ -33,13 +34,25 @@ import "./App.css";
 
 type StatusKey = "new" | "in_progress" | "done";
 
+type TaskComment = {
+  id: number;
+  taskId: number;
+  body: string;
+  authorId?: number;
+  authorEmail: string;
+  createdAt: string;
+};
+
 type Task = {
   id: number;
   title: string;
   status: StatusKey;
-  comment: string;
+  description: string;
   projectId: number;
   createdAt: string;
+  createdBy: number;
+  authorEmail: string;
+  comments: TaskComment[];
 };
 
 type Project = {
@@ -95,30 +108,23 @@ const columnDescriptions: Record<StatusKey, string> = {
 function StatusColumn({
   status,
   tasks,
-  onChangeStatus,
-  updatingId,
-  editingId,
-  commentDraft,
-  onEditStart,
-  onEditChange,
-  onEditSave,
-  onEditCancel,
-  onDeleteTask,
-  deletingId,
+  onSelectTask,
 }: {
   status: StatusKey;
   tasks: Task[];
-  updatingId: number | null;
-  onChangeStatus: (taskId: number, status: StatusKey) => Promise<void>;
-  editingId: number | null;
-  commentDraft: string;
-  onEditStart: (task: Task) => void;
-  onEditChange: (value: string) => void;
-  onEditSave: (taskId: number) => Promise<void>;
-  onEditCancel: () => void;
-  onDeleteTask: (taskId: number) => Promise<void>;
-  deletingId: number | null;
+  onSelectTask: (taskId: number) => void;
 }) {
+  const handleCardClick = (
+    event: React.MouseEvent<HTMLElement>,
+    taskId: number,
+  ) => {
+    const target = event.target as HTMLElement | null;
+    if (target && target.closest(".card-interactive")) {
+      return;
+    }
+    onSelectTask(taskId);
+  };
+
   return (
     <Card
       title={
@@ -143,91 +149,24 @@ function StatusColumn({
             size="small"
             title={task.title}
             className="task-card"
+            hoverable
+            onClick={(e) => handleCardClick(e, task.id)}
             extra={
               <Tag color={statusMeta[task.status].color}>
                 {statusMeta[task.status].label}
               </Tag>
             }
-            actions={[
-              <Select
-                key="status"
-                size="small"
-                value={task.status}
-                className="status-select"
-                onChange={(value) => onChangeStatus(task.id, value)}
-                options={statusOrder.map((s) => ({
-                  label: statusMeta[s].label,
-                  value: s,
-                }))}
-                suffixIcon={
-                  updatingId === task.id ? (
-                    <LoadingOutlined spin />
-                  ) : (
-                    <HighlightOutlined />
-                  )
-                }
-              />,
-              <Popconfirm
-                key="delete"
-                title="Удалить задачу?"
-                onConfirm={() => onDeleteTask(task.id)}
-              >
-                <Button
-                  type="text"
-                  icon={<DeleteOutlined />}
-                  danger
-                  loading={deletingId === task.id}
-                />
-              </Popconfirm>,
-            ]}
           >
             <Space direction="vertical" size={4}>
               <div className="meta-row">
                 <span className="meta-label">Создана:</span>
                 <span className="meta-value">{formatDate(task.createdAt)}</span>
               </div>
-              <div className="comment-block">
-                <div className="meta-label">Комментарий:</div>
-                {editingId === task.id ? (
-                  <Space
-                    direction="vertical"
-                    size="small"
-                    className="comment-edit"
-                  >
-                    <Input.TextArea
-                      value={commentDraft}
-                      onChange={(e) => onEditChange(e.target.value)}
-                      autoSize={{ minRows: 2, maxRows: 4 }}
-                      placeholder="Добавьте детали по задаче"
-                    />
-                    <Space size="small">
-                      <Button
-                        type="primary"
-                        size="small"
-                        onClick={() => onEditSave(task.id)}
-                        loading={updatingId === task.id}
-                      >
-                        Сохранить
-                      </Button>
-                      <Button size="small" onClick={onEditCancel}>
-                        Отмена
-                      </Button>
-                    </Space>
-                  </Space>
-                ) : (
-                  <div className="comment-display">
-                    <span className="meta-value">
-                      {task.comment ? task.comment : "Комментария нет"}
-                    </span>
-                    <Button
-                      type="link"
-                      size="small"
-                      onClick={() => onEditStart(task)}
-                    >
-                      Изменить
-                    </Button>
-                  </div>
-                )}
+              <div className="meta-row">
+                <span className="meta-label">Автор:</span>
+                <span className="meta-value">
+                  {task.authorEmail || "Не указан"}
+                </span>
               </div>
             </Space>
           </Card>
@@ -243,15 +182,20 @@ function App() {
   const [selectedProject, setSelectedProject] = useState<number | null>(null);
   const [newProjectName, setNewProjectName] = useState("");
   const [title, setTitle] = useState("");
-  const [comment, setComment] = useState("");
+  const [description, setDescription] = useState("");
   const [loading, setLoading] = useState(true);
   const [loadingProjects, setLoadingProjects] = useState(true);
   const [creating, setCreating] = useState(false);
   const [creatingProject, setCreatingProject] = useState(false);
   const [updatingId, setUpdatingId] = useState<number | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [descriptionDraft, setDescriptionDraft] = useState("");
   const [commentDraft, setCommentDraft] = useState("");
+  const [addingComment, setAddingComment] = useState(false);
   const [deletingTaskId, setDeletingTaskId] = useState<number | null>(null);
+  const [deletingCommentId, setDeletingCommentId] = useState<number | null>(
+    null,
+  );
   const [deletingProject, setDeletingProject] = useState(false);
   const [user, setUser] = useState<User | null>(null);
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
@@ -268,6 +212,7 @@ function App() {
     null,
   );
   const [creatingUser, setCreatingUser] = useState(false);
+  const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
 
   const fetchMe = async () => {
     try {
@@ -330,6 +275,12 @@ function App() {
     setTasks([]);
     setProjects([]);
     setSelectedProject(null);
+    setDescription("");
+    setDescriptionDraft("");
+    setCommentDraft("");
+    setAddingComment(false);
+    setEditingId(null);
+    setSelectedTaskId(null);
   };
 
   const grouped = useMemo(() => {
@@ -342,10 +293,16 @@ function App() {
     return bucket;
   }, [tasks]);
 
+  const selectedTask = useMemo(
+    () => tasks.find((task) => task.id === selectedTaskId) ?? null,
+    [tasks, selectedTaskId],
+  );
+
   const loadTasks = async (projectId = selectedProject) => {
     if (!user || !projectId) {
       setLoading(false);
       setTasks([]);
+      setSelectedTaskId(null);
       return;
     }
     setLoading(true);
@@ -353,7 +310,17 @@ function App() {
       const response = await api.get<Task[]>("/tasks", {
         params: { projectId },
       });
-      setTasks(response.data);
+      const normalized = response.data.map((task) => ({
+        ...task,
+        comments: task.comments ?? [],
+      }));
+      setTasks(normalized);
+      if (
+        selectedTaskId &&
+        !normalized.some((task) => task.id === selectedTaskId)
+      ) {
+        setSelectedTaskId(null);
+      }
     } catch (error) {
       console.error(error);
       message.error("Не удалось загрузить задачи");
@@ -426,12 +393,15 @@ function App() {
     try {
       const response = await api.post<Task>("/tasks", {
         title,
-        comment,
+        description,
         projectId: selectedProject,
       });
-      setTasks((prev) => [response.data, ...prev]);
+      setTasks((prev) => [
+        { ...response.data, comments: response.data.comments ?? [] },
+        ...prev,
+      ]);
       setTitle("");
-      setComment("");
+      setDescription("");
       message.success("Задача создана");
     } catch (error) {
       console.error(error);
@@ -447,8 +417,12 @@ function App() {
       const response = await api.patch<Task>(`/tasks/${taskId}/status`, {
         status,
       });
+      const updatedTask = {
+        ...response.data,
+        comments: response.data.comments ?? [],
+      };
       setTasks((prev) =>
-        prev.map((task) => (task.id === taskId ? response.data : task)),
+        prev.map((task) => (task.id === taskId ? updatedTask : task)),
       );
       message.success("Статус обновлен");
     } catch (error) {
@@ -459,33 +433,106 @@ function App() {
     }
   };
 
-  const startEditComment = (task: Task) => {
+  const startEditDescription = (task: Task) => {
     setEditingId(task.id);
-    setCommentDraft(task.comment || "");
+    setDescriptionDraft(task.description || "");
   };
 
-  const cancelEditComment = () => {
+  const cancelEditDescription = () => {
     setEditingId(null);
-    setCommentDraft("");
+    setDescriptionDraft(selectedTask?.description ?? "");
   };
 
-  const saveComment = async (taskId: number) => {
+  const saveDescription = async (taskId: number) => {
     setUpdatingId(taskId);
     try {
       const response = await api.patch<Task>(`/tasks/${taskId}`, {
-        comment: commentDraft,
+        description: descriptionDraft,
       });
       setTasks((prev) =>
-        prev.map((task) => (task.id === taskId ? response.data : task)),
+        prev.map((task) =>
+          task.id === taskId
+            ? { ...response.data, comments: response.data.comments ?? [] }
+            : task,
+        ),
       );
       setEditingId(null);
-      setCommentDraft("");
-      message.success("Комментарий обновлен");
+      setDescriptionDraft("");
+      message.success("Описание обновлено");
     } catch (error) {
       console.error(error);
-      message.error("Не удалось обновить комментарий");
+      message.error("Не удалось обновить описание");
     } finally {
       setUpdatingId(null);
+    }
+  };
+
+  const loadTaskComments = async (taskId: number) => {
+    try {
+      const response = await api.get<TaskComment[]>(
+        `/tasks/${taskId}/comments`,
+      );
+      setTasks((prev) =>
+        prev.map((task) =>
+          task.id === taskId
+            ? { ...task, comments: response.data ?? [] }
+            : task,
+        ),
+      );
+    } catch (error) {
+      console.error(error);
+      message.error("Не удалось загрузить комментарии");
+    }
+  };
+
+  const openTaskDetails = (taskId: number) => {
+    setSelectedTaskId(taskId);
+    const currentTask = tasks.find((task) => task.id === taskId);
+    setDescriptionDraft(currentTask?.description ?? "");
+    setCommentDraft("");
+    setEditingId(null);
+    void loadTaskComments(taskId);
+  };
+
+  const closeTaskDetails = () => {
+    setSelectedTaskId(null);
+    setCommentDraft("");
+    setEditingId(null);
+    setDescriptionDraft("");
+  };
+
+  const addComment = async () => {
+    if (!selectedTask) {
+      return;
+    }
+    const text = commentDraft.trim();
+    if (!text) {
+      message.warning("Введите текст комментария");
+      return;
+    }
+    setAddingComment(true);
+    try {
+      const response = await api.post<TaskComment>(
+        `/tasks/${selectedTask.id}/comments`,
+        { body: text },
+      );
+      setTasks((prev) =>
+        prev.map((task) =>
+          task.id === selectedTask.id
+            ? {
+                ...task,
+                comments: [...(task.comments ?? []), response.data],
+              }
+            : task,
+        ),
+      );
+      setCommentDraft("");
+      message.success("Комментарий добавлен");
+    } catch (error) {
+      console.error(error);
+      message.error("Не удалось добавить комментарий");
+    } finally {
+      setAddingComment(false);
     }
   };
 
@@ -494,6 +541,9 @@ function App() {
     try {
       await api.delete(`/tasks/${taskId}`);
       setTasks((prev) => prev.filter((t) => t.id !== taskId));
+      if (selectedTaskId === taskId) {
+        closeTaskDetails();
+      }
       message.success("Задача удалена");
     } catch (error) {
       console.error(error);
@@ -503,8 +553,37 @@ function App() {
     }
   };
 
+  const deleteComment = async (commentId: number) => {
+    if (!selectedTask) {
+      return;
+    }
+    setDeletingCommentId(commentId);
+    try {
+      await api.delete(`/tasks/${selectedTask.id}/comments/${commentId}`);
+      setTasks((prev) =>
+        prev.map((task) =>
+          task.id === selectedTask.id
+            ? {
+                ...task,
+                comments: (task.comments ?? []).filter(
+                  (comment) => comment.id !== commentId,
+                ),
+              }
+            : task,
+        ),
+      );
+      message.success("Комментарий удален");
+    } catch (error) {
+      console.error(error);
+      message.error("Не удалось удалить комментарий");
+    } finally {
+      setDeletingCommentId(null);
+    }
+  };
+
   const handleProjectChange = (projectId: number) => {
     setSelectedProject(projectId);
+    setSelectedTaskId(null);
   };
 
   const handleCreateProject = async () => {
@@ -1046,9 +1125,9 @@ function App() {
                     </Button>
                   </Space.Compact>
                   <Input.TextArea
-                    placeholder="Комментарий (необязательно)"
-                    value={comment}
-                    onChange={(e) => setComment(e.target.value)}
+                    placeholder="Описание задачи (необязательно)"
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
                     autoSize={{ minRows: 2, maxRows: 4 }}
                   />
                 </Space>
@@ -1061,6 +1140,202 @@ function App() {
               <div className="loader">
                 <Spin tip="Загрузка задач..." size="large" />
               </div>
+            ) : selectedTask ? (
+              <Card
+                className="task-details-card"
+                title={
+                  <Space size="middle">
+                    <Button
+                      type="link"
+                      icon={<ArrowLeftOutlined />}
+                      onClick={closeTaskDetails}
+                    >
+                      К списку задач
+                    </Button>
+                    <span className="detail-title">{selectedTask.title}</span>
+                  </Space>
+                }
+                extra={
+                  <Space size="small" wrap>
+                    <Tag color={statusMeta[selectedTask.status].color}>
+                      {statusMeta[selectedTask.status].label}
+                    </Tag>
+                    <Select
+                      size="small"
+                      value={selectedTask.status}
+                      onChange={(value) =>
+                        changeStatus(selectedTask.id, value as StatusKey)
+                      }
+                      dropdownMatchSelectWidth={false}
+                      options={statusOrder.map((s) => ({
+                        label: statusMeta[s].label,
+                        value: s,
+                      }))}
+                      suffixIcon={
+                        updatingId === selectedTask.id ? (
+                          <LoadingOutlined spin />
+                        ) : (
+                          <HighlightOutlined />
+                        )
+                      }
+                      style={{ minWidth: 180 }}
+                    />
+                    <Popconfirm
+                      title="Удалить задачу?"
+                      onConfirm={() => void deleteTask(selectedTask.id)}
+                    >
+                      <Button
+                        icon={<DeleteOutlined />}
+                        danger
+                        loading={deletingTaskId === selectedTask.id}
+                      >
+                        Удалить
+                      </Button>
+                    </Popconfirm>
+                  </Space>
+                }
+              >
+                <Space
+                  direction="vertical"
+                  size="large"
+                  className="detail-content"
+                >
+                  <Space size="large" className="detail-meta" wrap>
+                    <div className="meta-row">
+                      <span className="meta-label">Создана:</span>
+                      <span className="meta-value">
+                        {formatDate(selectedTask.createdAt)}
+                      </span>
+                    </div>
+                    <div className="meta-row">
+                      <span className="meta-label">Автор:</span>
+                      <span className="meta-value">
+                        {selectedTask.authorEmail || "Не указан"}
+                      </span>
+                    </div>
+                  </Space>
+
+                  <div className="detail-section">
+                    <div className="section-header">
+                      <span className="meta-label">Описание</span>
+                    </div>
+                    {editingId === selectedTask.id ? (
+                      <Space
+                        direction="vertical"
+                        size="small"
+                        className="description-edit"
+                      >
+                        <Input.TextArea
+                          value={descriptionDraft}
+                          onChange={(e) => setDescriptionDraft(e.target.value)}
+                          autoSize={{ minRows: 3, maxRows: 6 }}
+                          placeholder="Опишите детали задачи"
+                        />
+                        <Space size="small">
+                          <Button
+                            type="primary"
+                            onClick={() => saveDescription(selectedTask.id)}
+                            loading={updatingId === selectedTask.id}
+                          >
+                            Сохранить
+                          </Button>
+                          <Button onClick={cancelEditDescription}>
+                            Отмена
+                          </Button>
+                        </Space>
+                      </Space>
+                    ) : (
+                      <div className="description-display">
+                        <p
+                          className={
+                            selectedTask.description
+                              ? "meta-value"
+                              : "muted-text"
+                          }
+                        >
+                          {selectedTask.description || "Описание отсутствует"}
+                        </p>
+                        <Button
+                          type="link"
+                          onClick={() => startEditDescription(selectedTask)}
+                        >
+                          Изменить
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="detail-section">
+                    <div className="comments-header">
+                      <span className="meta-label">Комментарии</span>
+                      <Tag color="default">
+                        {selectedTask.comments?.length ?? 0}
+                      </Tag>
+                    </div>
+                    {selectedTask.comments &&
+                    selectedTask.comments.length > 0 ? (
+                      <Space
+                        direction="vertical"
+                        size="small"
+                        className="comments-list"
+                      >
+                        {selectedTask.comments.map((comment) => (
+                          <div key={comment.id} className="comment-item">
+                            <div className="comment-meta">
+                              <span>{formatDate(comment.createdAt)}</span>
+                              <Space size="small">
+                                <span>
+                                  {comment.authorEmail || "Не указан"}
+                                </span>
+                                {user &&
+                                  (user.role === "admin" ||
+                                    comment.authorId === user.id) && (
+                                    <Popconfirm
+                                      title="Удалить комментарий?"
+                                      onConfirm={() =>
+                                        void deleteComment(comment.id)
+                                      }
+                                    >
+                                      <Button
+                                        type="link"
+                                        size="small"
+                                        danger
+                                        loading={
+                                          deletingCommentId === comment.id
+                                        }
+                                      >
+                                        Удалить
+                                      </Button>
+                                    </Popconfirm>
+                                  )}
+                              </Space>
+                            </div>
+                            <div className="comment-body">{comment.body}</div>
+                          </div>
+                        ))}
+                      </Space>
+                    ) : (
+                      <div className="muted-text">Комментариев нет</div>
+                    )}
+                    <div className="comment-form">
+                      <Input.TextArea
+                        value={commentDraft}
+                        onChange={(e) => setCommentDraft(e.target.value)}
+                        autoSize={{ minRows: 3, maxRows: 4 }}
+                        placeholder="Новый комментарий"
+                      />
+                      <Button
+                        type="primary"
+                        onClick={() => void addComment()}
+                        loading={addingComment}
+                        disabled={!commentDraft.trim()}
+                      >
+                        Добавить комментарий
+                      </Button>
+                    </div>
+                  </div>
+                </Space>
+              </Card>
             ) : (
               <Row gutter={[16, 16]} className="board">
                 {statusOrder.map((status) => (
@@ -1068,16 +1343,7 @@ function App() {
                     <StatusColumn
                       status={status}
                       tasks={grouped[status]}
-                      onChangeStatus={changeStatus}
-                      updatingId={updatingId}
-                      editingId={editingId}
-                      commentDraft={commentDraft}
-                      onEditStart={startEditComment}
-                      onEditChange={setCommentDraft}
-                      onEditSave={saveComment}
-                      onEditCancel={cancelEditComment}
-                      onDeleteTask={deleteTask}
-                      deletingId={deletingTaskId}
+                      onSelectTask={openTaskDetails}
                     />
                   </Col>
                 ))}

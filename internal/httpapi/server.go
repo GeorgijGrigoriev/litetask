@@ -41,6 +41,18 @@ type Server struct {
 	staticDir         string
 }
 
+type taskResponse struct {
+	ID          int64               `json:"id"`
+	Title       string              `json:"title"`
+	Status      string              `json:"status"`
+	Description string              `json:"description"`
+	ProjectID   int64               `json:"projectId"`
+	CreatedAt   time.Time           `json:"createdAt"`
+	CreatedBy   int64               `json:"createdBy"`
+	AuthorEmail string              `json:"authorEmail"`
+	Comments    []store.TaskComment `json:"comments"`
+}
+
 func New(s *store.Store, secret []byte, allowRegistration bool, staticDir string) *Server {
 	return &Server{
 		store:             s,
@@ -155,8 +167,30 @@ func (s *Server) handleTaskActions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(parts) == 2 && parts[1] == "comments" {
+		switch r.Method {
+		case http.MethodGet:
+			s.listTaskComments(w, r, id)
+		case http.MethodPost:
+			s.addTaskComment(w, r, id)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+		return
+	}
+
+	if len(parts) == 3 && parts[1] == "comments" && r.Method == http.MethodDelete {
+		commentID, err := strconv.ParseInt(parts[2], 10, 64)
+		if err != nil {
+			http.Error(w, "invalid comment id", http.StatusBadRequest)
+			return
+		}
+		s.deleteTaskComment(w, r, id, commentID)
+		return
+	}
+
 	if len(parts) == 1 && r.Method == http.MethodPatch {
-		s.updateComment(w, r, id)
+		s.updateDescription(w, r, id)
 		return
 	}
 
@@ -460,6 +494,39 @@ func (s *Server) deleteProjectHandler(w http.ResponseWriter, r *http.Request, id
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func toTaskResponse(t store.Task, comments []store.TaskComment) taskResponse {
+	if comments == nil {
+		comments = []store.TaskComment{}
+	}
+	return taskResponse{
+		ID:          t.ID,
+		Title:       t.Title,
+		Status:      t.Status,
+		Description: t.Description,
+		ProjectID:   t.ProjectID,
+		CreatedAt:   t.CreatedAt,
+		CreatedBy:   t.CreatedBy,
+		AuthorEmail: t.AuthorEmail,
+		Comments:    comments,
+	}
+}
+
+func (s *Server) attachComments(tasks []store.Task) ([]taskResponse, error) {
+	ids := make([]int64, 0, len(tasks))
+	for _, t := range tasks {
+		ids = append(ids, t.ID)
+	}
+	comments, err := s.store.ListCommentsByTaskIDs(ids)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]taskResponse, 0, len(tasks))
+	for _, t := range tasks {
+		result = append(result, toTaskResponse(t, comments[t.ID]))
+	}
+	return result, nil
+}
+
 func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
 	auth := getAuth(r)
 	projectID := int64(0)
@@ -485,22 +552,27 @@ func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, tasks)
+	withComments, err := s.attachComments(tasks)
+	if err != nil {
+		http.Error(w, "failed to load comments", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, withComments)
 }
 
 func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	auth := getAuth(r)
 	var payload struct {
-		Title     string `json:"title"`
-		Comment   string `json:"comment"`
-		ProjectID int64  `json:"projectId"`
+		Title       string `json:"title"`
+		Description string `json:"description"`
+		ProjectID   int64  `json:"projectId"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 	payload.Title = strings.TrimSpace(payload.Title)
-	payload.Comment = strings.TrimSpace(payload.Comment)
+	payload.Description = strings.TrimSpace(payload.Description)
 	if payload.ProjectID == 0 {
 		payload.ProjectID = store.DefaultProjectID
 	}
@@ -513,7 +585,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	created, err := s.store.InsertTask(payload.Title, payload.Comment, payload.ProjectID)
+	created, err := s.store.InsertTask(payload.Title, payload.Description, payload.ProjectID, auth.user.ID)
 	if err != nil {
 		if strings.Contains(err.Error(), "project not found") {
 			http.Error(w, "project not found", http.StatusBadRequest)
@@ -523,7 +595,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, created)
+	writeJSON(w, toTaskResponse(created, []store.TaskComment{}))
 }
 
 func (s *Server) updateStatus(w http.ResponseWriter, r *http.Request, id int64) {
@@ -564,10 +636,16 @@ func (s *Server) updateStatus(w http.ResponseWriter, r *http.Request, id int64) 
 		return
 	}
 
-	writeJSON(w, updated)
+	comments, err := s.store.ListTaskComments(id)
+	if err != nil {
+		http.Error(w, "failed to load comments", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, toTaskResponse(updated, comments))
 }
 
-func (s *Server) updateComment(w http.ResponseWriter, r *http.Request, id int64) {
+func (s *Server) updateDescription(w http.ResponseWriter, r *http.Request, id int64) {
 	auth := getAuth(r)
 	existing, err := s.store.GetTask(id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -583,25 +661,135 @@ func (s *Server) updateComment(w http.ResponseWriter, r *http.Request, id int64)
 		return
 	}
 	var payload struct {
-		Comment string `json:"comment"`
+		Description string `json:"description"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	payload.Comment = strings.TrimSpace(payload.Comment)
+	payload.Description = strings.TrimSpace(payload.Description)
 
-	updated, err := s.store.SetTaskComment(id, payload.Comment)
+	updated, err := s.store.SetTaskDescription(id, payload.Description)
 	if errors.Is(err, sql.ErrNoRows) {
 		http.Error(w, "task not found", http.StatusNotFound)
 		return
 	}
 	if err != nil {
-		http.Error(w, "failed to update comment", http.StatusInternalServerError)
+		http.Error(w, "failed to update description", http.StatusInternalServerError)
 		return
 	}
 
-	writeJSON(w, updated)
+	comments, err := s.store.ListTaskComments(id)
+	if err != nil {
+		http.Error(w, "failed to load comments", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, toTaskResponse(updated, comments))
+}
+
+func (s *Server) listTaskComments(w http.ResponseWriter, r *http.Request, taskID int64) {
+	auth := getAuth(r)
+	existing, err := s.store.GetTask(taskID)
+	if errors.Is(err, sql.ErrNoRows) {
+		http.Error(w, "task not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to load task", http.StatusInternalServerError)
+		return
+	}
+	if auth.isRestricted && !auth.canAccess(existing.ProjectID) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	comments, err := s.store.ListTaskComments(taskID)
+	if err != nil {
+		http.Error(w, "failed to load comments", http.StatusInternalServerError)
+		return
+	}
+	if comments == nil {
+		comments = []store.TaskComment{}
+	}
+	writeJSON(w, comments)
+}
+
+func (s *Server) addTaskComment(w http.ResponseWriter, r *http.Request, taskID int64) {
+	auth := getAuth(r)
+	existing, err := s.store.GetTask(taskID)
+	if errors.Is(err, sql.ErrNoRows) {
+		http.Error(w, "task not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to load task", http.StatusInternalServerError)
+		return
+	}
+	if auth.isRestricted && !auth.canAccess(existing.ProjectID) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	var payload struct {
+		Body string `json:"body"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	payload.Body = strings.TrimSpace(payload.Body)
+	if payload.Body == "" {
+		http.Error(w, "comment cannot be empty", http.StatusBadRequest)
+		return
+	}
+	comment, err := s.store.AddTaskComment(taskID, payload.Body, auth.user.ID)
+	if err != nil {
+		http.Error(w, "failed to add comment", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, comment)
+}
+
+func (s *Server) deleteTaskComment(w http.ResponseWriter, r *http.Request, taskID, commentID int64) {
+	auth := getAuth(r)
+	task, err := s.store.GetTask(taskID)
+	if errors.Is(err, sql.ErrNoRows) {
+		http.Error(w, "task not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to load task", http.StatusInternalServerError)
+		return
+	}
+	if auth.isRestricted && !auth.canAccess(task.ProjectID) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	comment, err := s.store.GetTaskComment(commentID)
+	if errors.Is(err, sql.ErrNoRows) {
+		http.Error(w, "comment not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to load comment", http.StatusInternalServerError)
+		return
+	}
+	if comment.TaskID != taskID {
+		http.Error(w, "comment does not belong to task", http.StatusBadRequest)
+		return
+	}
+	if auth.user.Role != "admin" && comment.AuthorID != auth.user.ID {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	if err := s.store.DeleteTaskComment(commentID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "comment not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "failed to delete comment", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) deleteTaskHandler(w http.ResponseWriter, r *http.Request, id int64) {
