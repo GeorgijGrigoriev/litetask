@@ -4,6 +4,7 @@ import {
   FolderAddOutlined,
   HighlightOutlined,
   LoadingOutlined,
+  MenuOutlined,
   PlayCircleOutlined,
   PlusOutlined,
   ReloadOutlined,
@@ -14,6 +15,7 @@ import {
   Button,
   Card,
   Col,
+  Drawer,
   Empty,
   Form,
   Input,
@@ -66,7 +68,10 @@ type Project = {
 type User = {
   id: number;
   email: string;
+  username?: string;
   role: "admin" | "user" | "blocked";
+  firstName?: string;
+  lastName?: string;
   projectIds?: number[];
   telegram?: string;
 };
@@ -204,6 +209,7 @@ function App() {
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState("");
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [activePage, setActivePage] = useState<"board" | "settings">("board");
   const [users, setUsers] = useState<User[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(false);
@@ -223,6 +229,13 @@ function App() {
   const [profileModalOpen, setProfileModalOpen] = useState(false);
   const [profilePassword, setProfilePassword] = useState("");
   const [profileTelegram, setProfileTelegram] = useState("");
+  const [profileFirstName, setProfileFirstName] = useState("");
+  const [profileLastName, setProfileLastName] = useState("");
+  const [profileUsername, setProfileUsername] = useState("");
+  const [editingUserInfo, setEditingUserInfo] = useState<User | null>(null);
+  const [editingUserFirstName, setEditingUserFirstName] = useState("");
+  const [editingUserLastName, setEditingUserLastName] = useState("");
+  const [savingUserInfo, setSavingUserInfo] = useState(false);
 
   const fetchMe = async () => {
     try {
@@ -237,14 +250,23 @@ function App() {
     email: string,
     password: string,
     mode: "login" | "register",
+    username?: string,
+    firstName?: string,
+    lastName?: string,
   ) => {
     setAuthLoading(true);
     setAuthError("");
     try {
       const response =
         mode === "login"
-          ? await api.post<User>("/auth/login", { email, password })
-          : await api.post<User>("/auth/register", { email, password });
+          ? await api.post<User>("/auth/login", { login: email, password })
+          : await api.post<User>("/auth/register", {
+              email,
+              username: username?.trim() ?? "",
+              password,
+              firstName: firstName?.trim() ?? "",
+              lastName: lastName?.trim() ?? "",
+            });
       setUser(response.data);
       message.success(
         mode === "login" ? "Вход выполнен" : "Регистрация успешна",
@@ -294,6 +316,7 @@ function App() {
     setProfileModalOpen(false);
     setProfilePassword("");
     setProfileTelegram("");
+    setProfileUsername("");
   };
 
   const grouped = useMemo(() => {
@@ -622,9 +645,20 @@ function App() {
 
   const handleUpdateProfile = async () => {
     if (!user) return;
-    const payload: { password?: string; telegram?: string } = {
+    const payload: {
+      password?: string;
+      telegram?: string;
+      firstName?: string;
+      lastName?: string;
+      username?: string;
+    } = {
       telegram: profileTelegram,
+      firstName: profileFirstName,
+      lastName: profileLastName,
     };
+    if (!user.username?.trim() && profileUsername.trim()) {
+      payload.username = profileUsername.trim();
+    }
     if (profilePassword.trim()) {
       payload.password = profilePassword.trim();
       if (payload.password.length < 6) {
@@ -637,6 +671,9 @@ function App() {
       setUser(response.data);
       setProfilePassword("");
       setProfileTelegram(response.data.telegram ?? "");
+      setProfileFirstName(response.data.firstName ?? "");
+      setProfileLastName(response.data.lastName ?? "");
+      setProfileUsername(response.data.username ?? "");
       message.success("Профиль обновлен");
       setProfileModalOpen(false);
     } catch (error) {
@@ -650,6 +687,48 @@ function App() {
       } else {
         message.error("Не удалось обновить профиль");
       }
+    }
+  };
+
+  const openUserInfoModal = (target: User) => {
+    setEditingUserInfo(target);
+    setEditingUserFirstName(target.firstName ?? "");
+    setEditingUserLastName(target.lastName ?? "");
+  };
+
+  const saveUserInfo = async () => {
+    if (!editingUserInfo) return;
+    setSavingUserInfo(true);
+    try {
+      const response = await api.patch<User>(`/users/${editingUserInfo.id}`, {
+        firstName: editingUserFirstName,
+        lastName: editingUserLastName,
+      });
+      setUsers((prev) =>
+        prev.map((u) =>
+          u.id === editingUserInfo.id
+            ? {
+                ...u,
+                ...response.data,
+                projectIds: response.data.projectIds ?? u.projectIds,
+              }
+            : u,
+        ),
+      );
+      if (response.data.id === user?.id) {
+        setUser({
+          ...user,
+          ...response.data,
+          projectIds: response.data.projectIds ?? user.projectIds,
+        });
+      }
+      message.success("Данные пользователя обновлены");
+      setEditingUserInfo(null);
+    } catch (error) {
+      console.error(error);
+      message.error("Не удалось обновить данные пользователя");
+    } finally {
+      setSavingUserInfo(false);
     }
   };
 
@@ -811,8 +890,11 @@ function App() {
 
   const handleCreateUser = async (values: {
     email: string;
+    username?: string;
     password: string;
     role: User["role"];
+    firstName?: string;
+    lastName?: string;
   }) => {
     setCreatingUser(true);
     try {
@@ -881,15 +963,69 @@ function App() {
             <Form
               layout="vertical"
               onFinish={(values) =>
-                handleAuth(values.email, values.password, authMode)
+                handleAuth(
+                  values.email,
+                  values.password,
+                  authMode,
+                  values.username,
+                  values.firstName,
+                  values.lastName,
+                )
               }
             >
+              {authMode === "register" && (
+                <>
+                  <Form.Item
+                    name="username"
+                    label="Юзернейм"
+                    rules={[
+                      { required: true, message: "Введите юзернейм" },
+                      { min: 3, max: 32, message: "От 3 до 32 символов" },
+                      {
+                        pattern: /^[A-Za-z0-9_.-]+$/,
+                        message: "Допустимы a-z, 0-9, _, ., -",
+                      },
+                    ]}
+                  >
+                    <Input
+                      placeholder="юзернейм"
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                    />
+                  </Form.Item>
+                  <Form.Item name="firstName" label="Имя">
+                    <Input placeholder="Имя (опционально)" />
+                  </Form.Item>
+                  <Form.Item name="lastName" label="Фамилия">
+                    <Input placeholder="Фамилия (опционально)" />
+                  </Form.Item>
+                </>
+              )}
               <Form.Item
                 name="email"
-                label="Email"
-                rules={[{ required: true, type: "email" }]}
+                label={authMode === "login" ? "Email или юзернейм" : "Email"}
+                rules={[
+                  {
+                    required: true,
+                    message:
+                      authMode === "login"
+                        ? "Введите email или юзернейм"
+                        : "Введите email",
+                  },
+                  ...(authMode === "register"
+                    ? [{ type: "email" as const, message: "Введите email" }]
+                    : []),
+                ]}
               >
-                <Input placeholder="you@example.com" />
+                <Input
+                  placeholder={
+                    authMode === "login"
+                      ? "you@example.com или юзернейм"
+                      : "you@example.com"
+                  }
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                />
               </Form.Item>
               <Form.Item
                 name="password"
@@ -923,46 +1059,88 @@ function App() {
     <Layout className="layout">
       <Layout.Header className="header">
         <div className="brand">LiteTask</div>
-        <Space>
+        <Button
+          type="text"
+          icon={<MenuOutlined />}
+          className="header-menu-btn"
+          onClick={() => setMobileNavOpen(true)}
+          aria-label="Открыть меню"
+        />
+      </Layout.Header>
+      <Drawer
+        title="Меню"
+        placement="right"
+        width={320}
+        open={mobileNavOpen}
+        onClose={() => setMobileNavOpen(false)}
+      >
+        <Space direction="vertical" size="middle" className="mobile-nav">
+          <div className="mobile-nav-user">
+            <div className="mobile-nav-user__name">
+              {user.firstName || user.lastName
+                ? `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim()
+                : user.username || user.email}
+            </div>
+            <div className="mobile-nav-user__meta">
+              <Tag color={user.role === "admin" ? "green" : "blue"}>
+                {user.role === "admin" ? "Админ" : "Пользователь"}
+              </Tag>
+            </div>
+          </div>
           {user.role === "admin" && (
             <Button
+              block
               type="default"
-              onClick={() =>
+              onClick={() => {
                 setActivePage((prev) =>
                   prev === "board" ? "settings" : "board",
-                )
-              }
+                );
+                setMobileNavOpen(false);
+              }}
             >
               {activePage === "settings" ? "К задачам" : "Настройки"}
             </Button>
           )}
-          <Tag color={user.role === "admin" ? "green" : "blue"}>
-            {user.role === "admin" ? "Админ" : "Пользователь"}
-          </Tag>
-          <Space size={4} className="user-email">
-            <span>{user.email}</span>
-            <Button
-              icon={<SettingOutlined />}
-              type="text"
-              className="settings-btn"
-              onClick={() => {
-                setProfileTelegram(user.telegram ?? "");
-                setProfilePassword("");
-                setProfileModalOpen(true);
-              }}
-              title="Настройки профиля"
-            />
-          </Space>
           <Button
+            block
+            type="default"
+            icon={<SettingOutlined />}
+            onClick={() => {
+              setProfileTelegram(user.telegram ?? "");
+              setProfileFirstName(user.firstName ?? "");
+              setProfileLastName(user.lastName ?? "");
+              setProfileUsername(user.username ?? "");
+              setProfilePassword("");
+              setProfileModalOpen(true);
+              setMobileNavOpen(false);
+            }}
+          >
+            Профиль
+          </Button>
+          <Button
+            block
             type="default"
             icon={<ReloadOutlined />}
-            onClick={() => loadTasks()}
+            onClick={() => {
+              loadTasks();
+              setMobileNavOpen(false);
+            }}
           >
             Обновить
           </Button>
-          <Button onClick={handleLogout}>Выйти</Button>
+          <Button
+            block
+            type="primary"
+            danger
+            onClick={() => {
+              setMobileNavOpen(false);
+              handleLogout();
+            }}
+          >
+            Выйти
+          </Button>
         </Space>
-      </Layout.Header>
+      </Drawer>
       <Layout.Content className="content">
         {activePage === "settings" && user.role === "admin" ? (
           <>
@@ -1019,6 +1197,25 @@ function App() {
                 style={{ marginBottom: 12 }}
                 initialValues={{ role: "user" }}
               >
+                <Form.Item name="firstName">
+                  <Input placeholder="Имя" />
+                </Form.Item>
+                <Form.Item name="lastName">
+                  <Input placeholder="Фамилия" />
+                </Form.Item>
+                <Form.Item
+                  name="username"
+                  rules={[
+                    { required: true, message: "Введите юзернейм" },
+                    { min: 3, max: 32, message: "От 3 до 32 символов" },
+                    {
+                      pattern: /^[A-Za-z0-9_.-]+$/,
+                      message: "Допустимы a-z, 0-9, _, ., -",
+                    },
+                  ]}
+                >
+                  <Input placeholder="юзернейм" autoCapitalize="none" />
+                </Form.Item>
                 <Form.Item
                   name="email"
                   rules={[
@@ -1071,6 +1268,21 @@ function App() {
                   {
                     title: "Email",
                     dataIndex: "email",
+                  },
+                  {
+                    title: "Юзернейм",
+                    dataIndex: "username",
+                    render: (value: string | undefined) => value || "—",
+                  },
+                  {
+                    title: "Имя",
+                    dataIndex: "firstName",
+                    render: (value: string | undefined) => value || "—",
+                  },
+                  {
+                    title: "Фамилия",
+                    dataIndex: "lastName",
+                    render: (value: string | undefined) => value || "—",
                   },
                   {
                     title: "Проекты",
@@ -1151,6 +1363,12 @@ function App() {
                           {record.role === "blocked"
                             ? "Разблокировать"
                             : "Заблокировать"}
+                        </Button>
+                        <Button
+                          size="small"
+                          onClick={() => openUserInfoModal(record)}
+                        >
+                          Изменить имя
                         </Button>
                         <Button
                           size="small"
@@ -1437,6 +1655,36 @@ function App() {
       >
         <Space direction="vertical" size="middle" style={{ width: "100%" }}>
           <div className="meta-row">
+            <span className="meta-label">Имя:</span>
+            <Input
+              placeholder="Имя"
+              value={profileFirstName}
+              onChange={(e) => setProfileFirstName(e.target.value)}
+            />
+          </div>
+          <div className="meta-row">
+            <span className="meta-label">Фамилия:</span>
+            <Input
+              placeholder="Фамилия"
+              value={profileLastName}
+              onChange={(e) => setProfileLastName(e.target.value)}
+            />
+          </div>
+          <div className="meta-row">
+            <span className="meta-label">Юзернейм:</span>
+            {user.username ? (
+              <span className="meta-value">{user.username}</span>
+            ) : (
+              <Input
+                placeholder="Юзернейм (указывается один раз)"
+                value={profileUsername}
+                onChange={(e) => setProfileUsername(e.target.value)}
+                autoCapitalize="none"
+                autoCorrect="off"
+              />
+            )}
+          </div>
+          <div className="meta-row">
             <span className="meta-label">Email:</span>
             <span className="meta-value">{user.email}</span>
           </div>
@@ -1458,6 +1706,32 @@ function App() {
           <div className="muted-text">
             Пароль минимум 6 символов. Оставьте пустым, если не хотите менять.
           </div>
+        </Space>
+      </Modal>
+      <Modal
+        title={
+          editingUserInfo
+            ? `Данные пользователя: ${editingUserInfo.email}`
+            : "Данные пользователя"
+        }
+        open={!!editingUserInfo}
+        onCancel={() => setEditingUserInfo(null)}
+        onOk={() => void saveUserInfo()}
+        okText="Сохранить"
+        cancelText="Отмена"
+        confirmLoading={savingUserInfo}
+      >
+        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+          <Input
+            placeholder="Имя"
+            value={editingUserFirstName}
+            onChange={(e) => setEditingUserFirstName(e.target.value)}
+          />
+          <Input
+            placeholder="Фамилия"
+            value={editingUserLastName}
+            onChange={(e) => setEditingUserLastName(e.target.value)}
+          />
         </Space>
       </Modal>
       <Modal

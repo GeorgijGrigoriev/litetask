@@ -241,7 +241,10 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 		trimmed := make([]struct {
 			ID         int64   `json:"id"`
 			Email      string  `json:"email"`
+			Username   string  `json:"username"`
 			Role       string  `json:"role"`
+			FirstName  string  `json:"firstName"`
+			LastName   string  `json:"lastName"`
 			ProjectIDs []int64 `json:"projectIds"`
 		}, len(users))
 		for i, u := range users {
@@ -249,22 +252,29 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 			trimmed[i] = struct {
 				ID         int64   `json:"id"`
 				Email      string  `json:"email"`
+				Username   string  `json:"username"`
 				Role       string  `json:"role"`
+				FirstName  string  `json:"firstName"`
+				LastName   string  `json:"lastName"`
 				ProjectIDs []int64 `json:"projectIds"`
-			}{ID: u.ID, Email: u.Email, Role: u.Role, ProjectIDs: projects}
+			}{ID: u.ID, Email: u.Email, Username: u.Username, Role: u.Role, FirstName: u.FirstName, LastName: u.LastName, ProjectIDs: projects}
 		}
 		writeJSON(w, trimmed)
 	case http.MethodPost:
 		var payload struct {
-			Email    string `json:"email"`
-			Password string `json:"password"`
-			Role     string `json:"role"`
+			Email     string `json:"email"`
+			Username  string `json:"username"`
+			Password  string `json:"password"`
+			Role      string `json:"role"`
+			FirstName string `json:"firstName"`
+			LastName  string `json:"lastName"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			http.Error(w, "invalid request body", http.StatusBadRequest)
 			return
 		}
 		payload.Email = strings.ToLower(strings.TrimSpace(payload.Email))
+		payload.Username = strings.TrimSpace(strings.ToLower(payload.Username))
 		payload.Password = strings.TrimSpace(payload.Password)
 		payload.Role = strings.TrimSpace(strings.ToLower(payload.Role))
 		if payload.Email == "" || payload.Password == "" {
@@ -282,10 +292,19 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid role", http.StatusBadRequest)
 			return
 		}
-		u, err := s.store.CreateUser(payload.Email, payload.Password, payload.Role)
+		u, err := s.store.CreateUser(payload.Email, payload.Username, payload.Password, payload.Role, payload.FirstName, payload.LastName)
 		if err != nil {
 			if strings.Contains(strings.ToLower(err.Error()), "unique") {
+				lower := strings.ToLower(err.Error())
+				if strings.Contains(lower, "users.username") || strings.Contains(lower, "idx_users_username") {
+					http.Error(w, "юзернейм уже занят", http.StatusBadRequest)
+					return
+				}
 				http.Error(w, "email already registered", http.StatusBadRequest)
+				return
+			}
+			if strings.Contains(strings.ToLower(err.Error()), "username") {
+				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
 			http.Error(w, "failed to create user", http.StatusInternalServerError)
@@ -295,9 +314,12 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, struct {
 			ID         int64   `json:"id"`
 			Email      string  `json:"email"`
+			Username   string  `json:"username"`
 			Role       string  `json:"role"`
+			FirstName  string  `json:"firstName"`
+			LastName   string  `json:"lastName"`
 			ProjectIDs []int64 `json:"projectIds"`
-		}{ID: u.ID, Email: u.Email, Role: u.Role, ProjectIDs: projects})
+		}{ID: u.ID, Email: u.Email, Username: u.Username, Role: u.Role, FirstName: u.FirstName, LastName: u.LastName, ProjectIDs: projects})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -322,6 +344,8 @@ func (s *Server) handleUserActions(w http.ResponseWriter, r *http.Request) {
 		Role       string  `json:"role"`
 		Password   string  `json:"password"`
 		ProjectIDs []int64 `json:"projectIds"`
+		FirstName  *string `json:"firstName"`
+		LastName   *string `json:"lastName"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -329,7 +353,7 @@ func (s *Server) handleUserActions(w http.ResponseWriter, r *http.Request) {
 	}
 	payload.Role = strings.TrimSpace(strings.ToLower(payload.Role))
 	password := strings.TrimSpace(payload.Password)
-	if payload.Role == "" && password == "" && payload.ProjectIDs == nil {
+	if payload.Role == "" && password == "" && payload.ProjectIDs == nil && payload.FirstName == nil && payload.LastName == nil {
 		http.Error(w, "nothing to update", http.StatusBadRequest)
 		return
 	}
@@ -375,6 +399,17 @@ func (s *Server) handleUserActions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if payload.FirstName != nil || payload.LastName != nil {
+		updated, err = s.store.UpdateUserProfile(id, nil, nil, payload.FirstName, payload.LastName)
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "user not found", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			http.Error(w, "failed to update user", http.StatusInternalServerError)
+			return
+		}
+	}
 	if updated.ID == 0 {
 		updated, err = s.store.GetUserByID(id)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -390,9 +425,12 @@ func (s *Server) handleUserActions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, struct {
 		ID         int64   `json:"id"`
 		Email      string  `json:"email"`
+		Username   string  `json:"username"`
 		Role       string  `json:"role"`
+		FirstName  string  `json:"firstName"`
+		LastName   string  `json:"lastName"`
 		ProjectIDs []int64 `json:"projectIds"`
-	}{ID: updated.ID, Email: updated.Email, Role: updated.Role, ProjectIDs: projects})
+	}{ID: updated.ID, Email: updated.Email, Username: updated.Username, Role: updated.Role, FirstName: updated.FirstName, LastName: updated.LastName, ProjectIDs: projects})
 }
 
 func (s *Server) handleProjectActions(w http.ResponseWriter, r *http.Request) {
@@ -821,6 +859,7 @@ func (s *Server) deleteTaskHandler(w http.ResponseWriter, r *http.Request, id in
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var payload struct {
+		Login    string `json:"login"`
 		Email    string `json:"email"`
 		Password string `json:"password"`
 	}
@@ -828,12 +867,15 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	payload.Email = strings.TrimSpace(strings.ToLower(payload.Email))
-	if payload.Email == "" || payload.Password == "" {
-		http.Error(w, "email and password required", http.StatusBadRequest)
+	login := strings.TrimSpace(strings.ToLower(payload.Login))
+	if login == "" {
+		login = strings.TrimSpace(strings.ToLower(payload.Email))
+	}
+	if login == "" || payload.Password == "" {
+		http.Error(w, "email/юзернейм и пароль обязательны", http.StatusBadRequest)
 		return
 	}
-	u, err := s.store.GetUserByEmail(payload.Email)
+	u, err := s.store.GetUserByEmailOrUsername(login)
 	if errors.Is(err, sql.ErrNoRows) {
 		http.Error(w, "invalid credentials", http.StatusUnauthorized)
 		return
@@ -853,15 +895,21 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	token := createToken(u, s.authSecret)
 	setAuthCookie(w, token)
 	writeJSON(w, struct {
-		ID       int64  `json:"id"`
-		Email    string `json:"email"`
-		Role     string `json:"role"`
-		Telegram string `json:"telegram"`
+		ID        int64  `json:"id"`
+		Email     string `json:"email"`
+		Username  string `json:"username"`
+		Role      string `json:"role"`
+		FirstName string `json:"firstName"`
+		LastName  string `json:"lastName"`
+		Telegram  string `json:"telegram"`
 	}{
-		ID:       u.ID,
-		Email:    u.Email,
-		Role:     u.Role,
-		Telegram: u.Telegram,
+		ID:        u.ID,
+		Email:     u.Email,
+		Username:  u.Username,
+		Role:      u.Role,
+		FirstName: u.FirstName,
+		LastName:  u.LastName,
+		Telegram:  u.Telegram,
 	})
 }
 
@@ -871,14 +919,18 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var payload struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Email     string `json:"email"`
+		Username  string `json:"username"`
+		Password  string `json:"password"`
+		FirstName string `json:"firstName"`
+		LastName  string `json:"lastName"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 	payload.Email = strings.TrimSpace(strings.ToLower(payload.Email))
+	payload.Username = strings.TrimSpace(strings.ToLower(payload.Username))
 	if payload.Email == "" || payload.Password == "" {
 		http.Error(w, "email and password required", http.StatusBadRequest)
 		return
@@ -887,10 +939,19 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "password too short", http.StatusBadRequest)
 		return
 	}
-	u, err := s.store.CreateUser(payload.Email, payload.Password, "user")
+	u, err := s.store.CreateUser(payload.Email, payload.Username, payload.Password, "user", payload.FirstName, payload.LastName)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
+			lower := strings.ToLower(err.Error())
+			if strings.Contains(lower, "users.username") || strings.Contains(lower, "idx_users_username") {
+				http.Error(w, "юзернейм уже занят", http.StatusBadRequest)
+				return
+			}
 			http.Error(w, "email already registered", http.StatusBadRequest)
+			return
+		}
+		if strings.Contains(err.Error(), "username") {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		http.Error(w, "server error", http.StatusInternalServerError)
@@ -899,15 +960,21 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	token := createToken(u, s.authSecret)
 	setAuthCookie(w, token)
 	writeJSON(w, struct {
-		ID       int64  `json:"id"`
-		Email    string `json:"email"`
-		Role     string `json:"role"`
-		Telegram string `json:"telegram"`
+		ID        int64  `json:"id"`
+		Email     string `json:"email"`
+		Username  string `json:"username"`
+		Role      string `json:"role"`
+		FirstName string `json:"firstName"`
+		LastName  string `json:"lastName"`
+		Telegram  string `json:"telegram"`
 	}{
-		ID:       u.ID,
-		Email:    u.Email,
-		Role:     u.Role,
-		Telegram: u.Telegram,
+		ID:        u.ID,
+		Email:     u.Email,
+		Username:  u.Username,
+		Role:      u.Role,
+		FirstName: u.FirstName,
+		LastName:  u.LastName,
+		Telegram:  u.Telegram,
 	})
 }
 
@@ -918,15 +985,21 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, struct {
-		ID       int64  `json:"id"`
-		Email    string `json:"email"`
-		Role     string `json:"role"`
-		Telegram string `json:"telegram"`
+		ID        int64  `json:"id"`
+		Email     string `json:"email"`
+		Username  string `json:"username"`
+		Role      string `json:"role"`
+		FirstName string `json:"firstName"`
+		LastName  string `json:"lastName"`
+		Telegram  string `json:"telegram"`
 	}{
-		ID:       u.ID,
-		Email:    u.Email,
-		Role:     u.Role,
-		Telegram: u.Telegram,
+		ID:        u.ID,
+		Email:     u.Email,
+		Username:  u.Username,
+		Role:      u.Role,
+		FirstName: u.FirstName,
+		LastName:  u.LastName,
+		Telegram:  u.Telegram,
 	})
 }
 
@@ -945,26 +1018,35 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		writeJSON(w, struct {
-			ID       int64  `json:"id"`
-			Email    string `json:"email"`
-			Role     string `json:"role"`
-			Telegram string `json:"telegram"`
+			ID        int64  `json:"id"`
+			Email     string `json:"email"`
+			Username  string `json:"username"`
+			Role      string `json:"role"`
+			FirstName string `json:"firstName"`
+			LastName  string `json:"lastName"`
+			Telegram  string `json:"telegram"`
 		}{
-			ID:       u.ID,
-			Email:    u.Email,
-			Role:     u.Role,
-			Telegram: u.Telegram,
+			ID:        u.ID,
+			Email:     u.Email,
+			Username:  u.Username,
+			Role:      u.Role,
+			FirstName: u.FirstName,
+			LastName:  u.LastName,
+			Telegram:  u.Telegram,
 		})
 	case http.MethodPatch:
 		var payload struct {
-			Password *string `json:"password"`
-			Telegram *string `json:"telegram"`
+			Password  *string `json:"password"`
+			Telegram  *string `json:"telegram"`
+			FirstName *string `json:"firstName"`
+			LastName  *string `json:"lastName"`
+			Username  *string `json:"username"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			http.Error(w, "invalid request body", http.StatusBadRequest)
 			return
 		}
-		if payload.Password == nil && payload.Telegram == nil {
+		if payload.Password == nil && payload.Telegram == nil && payload.FirstName == nil && payload.LastName == nil && payload.Username == nil {
 			http.Error(w, "nothing to update", http.StatusBadRequest)
 			return
 		}
@@ -972,7 +1054,43 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 			trimmed := strings.TrimSpace(*payload.Telegram)
 			payload.Telegram = &trimmed
 		}
-		updated, err := s.store.UpdateUserProfile(u.ID, payload.Password, payload.Telegram)
+		if payload.FirstName != nil {
+			trimmed := strings.TrimSpace(*payload.FirstName)
+			payload.FirstName = &trimmed
+		}
+		if payload.LastName != nil {
+			trimmed := strings.TrimSpace(*payload.LastName)
+			payload.LastName = &trimmed
+		}
+		if payload.Username != nil {
+			trimmed := strings.TrimSpace(strings.ToLower(*payload.Username))
+			payload.Username = &trimmed
+		}
+
+		if payload.Username != nil && *payload.Username != "" {
+			if u.Username != "" && u.Username != *payload.Username {
+				http.Error(w, "юзернейм уже установлен", http.StatusBadRequest)
+				return
+			}
+			if u.Username == "" {
+				updated, err := s.store.SetUsernameOnce(u.ID, *payload.Username)
+				if err != nil {
+					if errors.Is(err, store.ErrUsernameSet) {
+						http.Error(w, "юзернейм уже установлен", http.StatusBadRequest)
+						return
+					}
+					if strings.Contains(strings.ToLower(err.Error()), "unique") {
+						http.Error(w, "юзернейм уже занят", http.StatusBadRequest)
+						return
+					}
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				u = updated
+			}
+		}
+
+		updated, err := s.store.UpdateUserProfile(u.ID, payload.Password, payload.Telegram, payload.FirstName, payload.LastName)
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "user not found", http.StatusNotFound)
 			return
@@ -986,15 +1104,21 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, struct {
-			ID       int64  `json:"id"`
-			Email    string `json:"email"`
-			Role     string `json:"role"`
-			Telegram string `json:"telegram"`
+			ID        int64  `json:"id"`
+			Email     string `json:"email"`
+			Username  string `json:"username"`
+			Role      string `json:"role"`
+			FirstName string `json:"firstName"`
+			LastName  string `json:"lastName"`
+			Telegram  string `json:"telegram"`
 		}{
-			ID:       updated.ID,
-			Email:    updated.Email,
-			Role:     updated.Role,
-			Telegram: updated.Telegram,
+			ID:        updated.ID,
+			Email:     updated.Email,
+			Username:  updated.Username,
+			Role:      updated.Role,
+			FirstName: updated.FirstName,
+			LastName:  updated.LastName,
+			Telegram:  updated.Telegram,
 		})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

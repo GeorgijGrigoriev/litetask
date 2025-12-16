@@ -15,12 +15,35 @@
     background: #0f172a;
     color: #f8fafc;
     padding-inline: 24px;
+    height: 64px;
+    line-height: normal;
 }
 
 .brand {
     font-weight: 700;
     letter-spacing: 0.5px;
     font-size: 18px;
+}
+
+.header-actions--mobile {
+    display: none;
+}
+
+.header-menu-btn {
+    color: #fff !important;
+}
+
+.mobile-nav {
+    width: 100%;
+}
+
+.mobile-nav-user__name {
+    font-weight: 600;
+    word-break: break-word;
+}
+
+.mobile-nav-user__meta {
+    margin-top: 8px;
 }
 
 .content {
@@ -258,6 +281,15 @@
     color: #e2e8f0;
 }
 
+.user-email span {
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: inline-block;
+    vertical-align: bottom;
+}
+
 .settings-btn {
     color: #fff !important;
 }
@@ -266,6 +298,24 @@
 .settings-btn:focus {
     color: #e2e8f0 !important;
     background: rgba(255, 255, 255, 0.08);
+}
+
+@media (max-width: 768px) {
+    .header {
+        height: auto;
+        padding-inline: 12px;
+        padding-block: 12px;
+        gap: 12px;
+    }
+
+    .header-actions--desktop {
+        display: none !important;
+    }
+
+    .header-actions--mobile {
+        display: flex;
+        align-items: center;
+    }
 }
 
 @media (max-width: 640px) {

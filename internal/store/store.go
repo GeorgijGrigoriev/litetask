@@ -43,6 +43,7 @@ var (
 	ErrInvalidStatus = errors.New("invalid status")
 	ErrInvalidRole   = errors.New("invalid role")
 	ErrLastAdmin     = errors.New("cannot remove last admin")
+	ErrUsernameSet   = errors.New("username already set")
 )
 
 type Task struct {
@@ -74,8 +75,11 @@ type Project struct {
 type User struct {
 	ID        int64     `json:"id"`
 	Email     string    `json:"email"`
+	Username  string    `json:"username"`
 	Password  string    `json:"-"`
 	Role      string    `json:"role"`
+	FirstName string    `json:"firstName"`
+	LastName  string    `json:"lastName"`
 	Telegram  string    `json:"telegram"`
 	CreatedAt time.Time `json:"createdAt"`
 }
@@ -324,19 +328,35 @@ func (s *Store) DeleteProject(id int64) error {
 	return tx.Commit()
 }
 
-func (s *Store) CreateUser(email, password, role string) (User, error) {
+func (s *Store) CreateUser(email, username, password, role, firstName, lastName string) (User, error) {
 	var u User
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return u, err
 	}
-	res, err := s.db.Exec(`INSERT INTO users (email, password_hash, role, telegram) VALUES (?, ?, ?, '')`, email, string(hash), role)
+	firstName = strings.TrimSpace(firstName)
+	lastName = strings.TrimSpace(lastName)
+	username = strings.TrimSpace(strings.ToLower(username))
+	if username != "" {
+		if err := validateUsername(username); err != nil {
+			return u, err
+		}
+	}
+	res, err := s.db.Exec(
+		`INSERT INTO users (email, username, password_hash, role, first_name, last_name, telegram) VALUES (?, ?, ?, ?, ?, ?, '')`,
+		email,
+		nullableString(username),
+		string(hash),
+		role,
+		firstName,
+		lastName,
+	)
 	if err != nil {
 		return u, err
 	}
 	id, _ := res.LastInsertId()
-	err = s.db.QueryRow(`SELECT id, email, password_hash, role, created_at, telegram FROM users WHERE id = ?`, id).
-		Scan(&u.ID, &u.Email, &u.Password, &u.Role, &u.CreatedAt, &u.Telegram)
+	err = s.db.QueryRow(`SELECT id, email, COALESCE(username, ''), password_hash, role, created_at, telegram, first_name, last_name FROM users WHERE id = ?`, id).
+		Scan(&u.ID, &u.Email, &u.Username, &u.Password, &u.Role, &u.CreatedAt, &u.Telegram, &u.FirstName, &u.LastName)
 	if err != nil {
 		return u, err
 	}
@@ -349,8 +369,27 @@ func (s *Store) CreateUser(email, password, role string) (User, error) {
 
 func (s *Store) GetUserByEmail(email string) (User, error) {
 	var u User
-	err := s.db.QueryRow(`SELECT id, email, password_hash, role, created_at, telegram FROM users WHERE email = ?`, email).
-		Scan(&u.ID, &u.Email, &u.Password, &u.Role, &u.CreatedAt, &u.Telegram)
+	err := s.db.QueryRow(`SELECT id, email, COALESCE(username, ''), password_hash, role, created_at, telegram, first_name, last_name FROM users WHERE email = ?`, email).
+		Scan(&u.ID, &u.Email, &u.Username, &u.Password, &u.Role, &u.CreatedAt, &u.Telegram, &u.FirstName, &u.LastName)
+	if err != nil {
+		return u, err
+	}
+	u.CreatedAt = u.CreatedAt.UTC()
+	return u, nil
+}
+
+func (s *Store) GetUserByEmailOrUsername(login string) (User, error) {
+	var u User
+	login = strings.TrimSpace(strings.ToLower(login))
+	err := s.db.QueryRow(
+		`SELECT id, email, COALESCE(username, ''), password_hash, role, created_at, telegram, first_name, last_name
+		FROM users
+		WHERE email = ? OR username = ?
+		ORDER BY id
+		LIMIT 1`,
+		login,
+		login,
+	).Scan(&u.ID, &u.Email, &u.Username, &u.Password, &u.Role, &u.CreatedAt, &u.Telegram, &u.FirstName, &u.LastName)
 	if err != nil {
 		return u, err
 	}
@@ -360,8 +399,8 @@ func (s *Store) GetUserByEmail(email string) (User, error) {
 
 func (s *Store) GetUserByID(id int64) (User, error) {
 	var u User
-	err := s.db.QueryRow(`SELECT id, email, password_hash, role, created_at, telegram FROM users WHERE id = ?`, id).
-		Scan(&u.ID, &u.Email, &u.Password, &u.Role, &u.CreatedAt, &u.Telegram)
+	err := s.db.QueryRow(`SELECT id, email, COALESCE(username, ''), password_hash, role, created_at, telegram, first_name, last_name FROM users WHERE id = ?`, id).
+		Scan(&u.ID, &u.Email, &u.Username, &u.Password, &u.Role, &u.CreatedAt, &u.Telegram, &u.FirstName, &u.LastName)
 	if err != nil {
 		return u, err
 	}
@@ -370,7 +409,7 @@ func (s *Store) GetUserByID(id int64) (User, error) {
 }
 
 func (s *Store) ListUsers() ([]User, error) {
-	rows, err := s.db.Query(`SELECT id, email, password_hash, role, created_at, telegram FROM users ORDER BY created_at DESC`)
+	rows, err := s.db.Query(`SELECT id, email, COALESCE(username, ''), password_hash, role, created_at, telegram, first_name, last_name FROM users ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -378,13 +417,46 @@ func (s *Store) ListUsers() ([]User, error) {
 	users := make([]User, 0)
 	for rows.Next() {
 		var u User
-		if err := rows.Scan(&u.ID, &u.Email, &u.Password, &u.Role, &u.CreatedAt, &u.Telegram); err != nil {
+		if err := rows.Scan(&u.ID, &u.Email, &u.Username, &u.Password, &u.Role, &u.CreatedAt, &u.Telegram, &u.FirstName, &u.LastName); err != nil {
 			return nil, err
 		}
 		u.CreatedAt = u.CreatedAt.UTC()
 		users = append(users, u)
 	}
 	return users, nil
+}
+
+func (s *Store) SetUsernameOnce(id int64, username string) (User, error) {
+	username = strings.TrimSpace(strings.ToLower(username))
+	if username == "" {
+		return User{}, errors.New("username required")
+	}
+	if err := validateUsername(username); err != nil {
+		return User{}, err
+	}
+
+	res, err := s.db.Exec(
+		`UPDATE users
+		SET username = ?
+		WHERE id = ? AND (username IS NULL OR username = '')`,
+		username,
+		id,
+	)
+	if err != nil {
+		return User{}, err
+	}
+	affected, _ := res.RowsAffected()
+	if affected == 0 {
+		var current sql.NullString
+		if err := s.db.QueryRow(`SELECT username FROM users WHERE id = ?`, id).Scan(&current); err != nil {
+			return User{}, err
+		}
+		if current.Valid && strings.TrimSpace(current.String) != "" {
+			return User{}, ErrUsernameSet
+		}
+		return User{}, sql.ErrNoRows
+	}
+	return s.GetUserByID(id)
 }
 
 func (s *Store) UpdateUserRole(id int64, role string) (User, error) {
@@ -444,8 +516,8 @@ func (s *Store) UpdateUserPassword(id int64, password string) (User, error) {
 	return s.GetUserByID(id)
 }
 
-func (s *Store) UpdateUserProfile(id int64, password *string, telegram *string) (User, error) {
-	if password == nil && telegram == nil {
+func (s *Store) UpdateUserProfile(id int64, password *string, telegram *string, firstName *string, lastName *string) (User, error) {
+	if password == nil && telegram == nil && firstName == nil && lastName == nil {
 		return s.GetUserByID(id)
 	}
 	sets := make([]string, 0)
@@ -466,6 +538,16 @@ func (s *Store) UpdateUserProfile(id int64, password *string, telegram *string) 
 	if telegram != nil {
 		sets = append(sets, "telegram = ?")
 		args = append(args, strings.TrimSpace(*telegram))
+	}
+
+	if firstName != nil {
+		sets = append(sets, "first_name = ?")
+		args = append(args, strings.TrimSpace(*firstName))
+	}
+
+	if lastName != nil {
+		sets = append(sets, "last_name = ?")
+		args = append(args, strings.TrimSpace(*lastName))
 	}
 
 	args = append(args, id)
@@ -740,8 +822,11 @@ CREATE TABLE IF NOT EXISTS projects (
 CREATE TABLE IF NOT EXISTS users (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	email TEXT NOT NULL UNIQUE,
+	username TEXT,
 	password_hash TEXT NOT NULL,
 	role TEXT NOT NULL DEFAULT 'user',
+	first_name TEXT NOT NULL DEFAULT '',
+	last_name TEXT NOT NULL DEFAULT '',
 	telegram TEXT NOT NULL DEFAULT '',
 	created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -781,6 +866,15 @@ CREATE TABLE IF NOT EXISTS user_projects (
 		return err
 	}
 
+	if _, err := db.Exec(`ALTER TABLE users ADD COLUMN username TEXT`); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+			log.Printf("warning: unable to add username column: %v", err)
+		}
+	}
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username) WHERE username IS NOT NULL AND username != ''`); err != nil {
+		log.Printf("warning: unable to ensure idx_users_username: %v", err)
+	}
+
 	if _, err := db.Exec(`ALTER TABLE tasks ADD COLUMN comment TEXT DEFAULT ''`); err != nil {
 		if !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
 			log.Printf("warning: unable to add comment column: %v", err)
@@ -805,6 +899,16 @@ CREATE TABLE IF NOT EXISTS user_projects (
 	if _, err := db.Exec(`ALTER TABLE users ADD COLUMN telegram TEXT NOT NULL DEFAULT ''`); err != nil {
 		if !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
 			log.Printf("warning: unable to add telegram column: %v", err)
+		}
+	}
+	if _, err := db.Exec(`ALTER TABLE users ADD COLUMN first_name TEXT NOT NULL DEFAULT ''`); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+			log.Printf("warning: unable to add first_name column: %v", err)
+		}
+	}
+	if _, err := db.Exec(`ALTER TABLE users ADD COLUMN last_name TEXT NOT NULL DEFAULT ''`); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+			log.Printf("warning: unable to add last_name column: %v", err)
 		}
 	}
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS task_comments (
@@ -904,4 +1008,30 @@ func nullableInt64(val int64) any {
 		return nil
 	}
 	return val
+}
+
+func nullableString(val string) any {
+	if strings.TrimSpace(val) == "" {
+		return nil
+	}
+	return val
+}
+
+func validateUsername(username string) error {
+	if len(username) < 3 || len(username) > 32 {
+		return errors.New("username must be 3-32 characters")
+	}
+	if strings.Contains(username, "@") {
+		return errors.New("username cannot contain @")
+	}
+	for _, r := range username {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= '0' && r <= '9':
+		case r == '_' || r == '-' || r == '.':
+		default:
+			return errors.New("username has invalid characters")
+		}
+	}
+	return nil
 }
