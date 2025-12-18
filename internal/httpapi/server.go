@@ -50,6 +50,8 @@ type taskResponse struct {
 	CreatedAt   time.Time           `json:"createdAt"`
 	CreatedBy   int64               `json:"createdBy"`
 	AuthorEmail string              `json:"authorEmail"`
+	AuthorFirst string              `json:"authorFirstName,omitempty"`
+	AuthorLast  string              `json:"authorLastName,omitempty"`
 	Comments    []store.TaskComment `json:"comments"`
 }
 
@@ -546,6 +548,8 @@ func toTaskResponse(t store.Task, comments []store.TaskComment) taskResponse {
 		CreatedAt:   t.CreatedAt,
 		CreatedBy:   t.CreatedBy,
 		AuthorEmail: t.AuthorEmail,
+		AuthorFirst: t.AuthorFirst,
+		AuthorLast:  t.AuthorLast,
 		Comments:    comments,
 	}
 }

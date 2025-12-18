@@ -162,6 +162,32 @@
     white-space: pre-wrap;
 }
 
+.profile-form .ant-form-item {
+    margin-bottom: 12px;
+}
+
+.profile-form .ant-form-item-label > label {
+    color: #94a3b8;
+    font-size: 13px;
+}
+
+.profile-form .ant-form-item-extra {
+    color: #94a3b8;
+    font-size: 12px;
+}
+
+.auto-refresh-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    background: #ffffff;
+}
+
 .description-block {
     margin-top: 6px;
     display: flex;

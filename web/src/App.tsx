@@ -7,7 +7,6 @@ import {
   MenuOutlined,
   PlayCircleOutlined,
   PlusOutlined,
-  ReloadOutlined,
   ArrowLeftOutlined,
   SettingOutlined,
 } from "@ant-design/icons";
@@ -15,6 +14,7 @@ import {
   Button,
   Card,
   Col,
+  Divider,
   Drawer,
   Empty,
   Form,
@@ -30,6 +30,7 @@ import {
   Table,
   Tag,
   Tabs,
+  Typography,
   message,
 } from "antd";
 import axios from "axios";
@@ -56,6 +57,8 @@ type Task = {
   createdAt: string;
   createdBy: number;
   authorEmail: string;
+  authorFirstName?: string;
+  authorLastName?: string;
   comments: TaskComment[];
 };
 
@@ -96,6 +99,10 @@ const api = axios.create({
   withCredentials: true,
 });
 
+const AUTO_REFRESH_INTERVAL_STORAGE_KEY = "litetask:autoRefreshIntervalMs";
+
+type AutoRefreshIntervalMs = 5_000 | 30_000 | 60_000 | 300_000;
+
 const formatDate = (value: string) =>
   new Date(value).toLocaleString("ru-RU", {
     timeZone: "Europe/Moscow",
@@ -106,6 +113,20 @@ const formatDate = (value: string) =>
     minute: "2-digit",
     hour12: false,
   });
+
+const formatAuthor = (author: {
+  authorEmail?: string;
+  authorFirstName?: string;
+  authorLastName?: string;
+}) => {
+  const first = (author.authorFirstName ?? "").trim();
+  const last = (author.authorLastName ?? "").trim();
+  const fullName = [first, last].filter(Boolean).join(" ").trim();
+  if (fullName) {
+    return fullName;
+  }
+  return author.authorEmail || "Не указан";
+};
 
 const columnDescriptions: Record<StatusKey, string> = {
   new: "Все новые задачи появляются здесь",
@@ -172,9 +193,7 @@ function StatusColumn({
               </div>
               <div className="meta-row">
                 <span className="meta-label">Автор:</span>
-                <span className="meta-value">
-                  {task.authorEmail || "Не указан"}
-                </span>
+                <span className="meta-value">{formatAuthor(task)}</span>
               </div>
             </Space>
           </Card>
@@ -232,10 +251,13 @@ function App() {
   const [profileFirstName, setProfileFirstName] = useState("");
   const [profileLastName, setProfileLastName] = useState("");
   const [profileUsername, setProfileUsername] = useState("");
+  const [profileSaving, setProfileSaving] = useState(false);
   const [editingUserInfo, setEditingUserInfo] = useState<User | null>(null);
   const [editingUserFirstName, setEditingUserFirstName] = useState("");
   const [editingUserLastName, setEditingUserLastName] = useState("");
   const [savingUserInfo, setSavingUserInfo] = useState(false);
+  const [autoRefreshIntervalMs, setAutoRefreshIntervalMs] =
+    useState<AutoRefreshIntervalMs | null>(60_000);
 
   const fetchMe = async () => {
     try {
@@ -334,14 +356,21 @@ function App() {
     [tasks, selectedTaskId],
   );
 
-  const loadTasks = async (projectId = selectedProject) => {
+  const loadTasks = async (
+    projectId = selectedProject,
+    options?: { silent?: boolean },
+  ) => {
     if (!user || !projectId) {
-      setLoading(false);
-      setTasks([]);
-      setSelectedTaskId(null);
+      if (!options?.silent) {
+        setLoading(false);
+        setTasks([]);
+        setSelectedTaskId(null);
+      }
       return;
     }
-    setLoading(true);
+    if (!options?.silent) {
+      setLoading(true);
+    }
     try {
       const response = await api.get<Task[]>("/tasks", {
         params: { projectId },
@@ -365,9 +394,13 @@ function App() {
       }
     } catch (error) {
       console.error(error);
-      message.error("Не удалось загрузить задачи");
+      if (!options?.silent) {
+        message.error("Не удалось загрузить задачи");
+      }
     } finally {
-      setLoading(false);
+      if (!options?.silent) {
+        setLoading(false);
+      }
     }
   };
 
@@ -405,12 +438,52 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const saved = localStorage.getItem(AUTO_REFRESH_INTERVAL_STORAGE_KEY);
+    if (!saved) {
+      return;
+    }
+    if (saved === "off") {
+      setAutoRefreshIntervalMs(null);
+      return;
+    }
+    const parsed = Number(saved);
+    if (
+      parsed === 5_000 ||
+      parsed === 30_000 ||
+      parsed === 60_000 ||
+      parsed === 300_000
+    ) {
+      setAutoRefreshIntervalMs(parsed);
+    }
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem(
+      AUTO_REFRESH_INTERVAL_STORAGE_KEY,
+      autoRefreshIntervalMs === null ? "off" : String(autoRefreshIntervalMs),
+    );
+  }, [autoRefreshIntervalMs]);
+
+  useEffect(() => {
     void loadProjects();
   }, [user]);
 
   useEffect(() => {
     void loadTasks();
   }, [selectedProject, user]);
+
+  useEffect(() => {
+    if (autoRefreshIntervalMs === null) {
+      return;
+    }
+    if (activePage !== "board" || !user || !selectedProject) {
+      return;
+    }
+    const intervalId = window.setInterval(() => {
+      void loadTasks(selectedProject, { silent: true });
+    }, autoRefreshIntervalMs);
+    return () => window.clearInterval(intervalId);
+  }, [activePage, autoRefreshIntervalMs, selectedProject, user]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -667,6 +740,7 @@ function App() {
       }
     }
     try {
+      setProfileSaving(true);
       const response = await api.patch<User>("/profile", payload);
       setUser(response.data);
       setProfilePassword("");
@@ -687,6 +761,8 @@ function App() {
       } else {
         message.error("Не удалось обновить профиль");
       }
+    } finally {
+      setProfileSaving(false);
     }
   };
 
@@ -1117,17 +1193,32 @@ function App() {
           >
             Профиль
           </Button>
-          <Button
-            block
-            type="default"
-            icon={<ReloadOutlined />}
-            onClick={() => {
-              loadTasks();
-              setMobileNavOpen(false);
-            }}
-          >
-            Обновить
-          </Button>
+          <div className="auto-refresh-row">
+            <div>
+              <div>Автообновление</div>
+              <div className="muted-text">Обновление задач</div>
+            </div>
+            <Select
+              value={
+                autoRefreshIntervalMs === null ? "off" : autoRefreshIntervalMs
+              }
+              onChange={(value) => {
+                if (value === "off") {
+                  setAutoRefreshIntervalMs(null);
+                } else {
+                  setAutoRefreshIntervalMs(value as AutoRefreshIntervalMs);
+                }
+              }}
+              options={[
+                { label: "Выкл", value: "off" },
+                { label: "5 секунд", value: 5_000 },
+                { label: "30 секунд", value: 30_000 },
+                { label: "1 минута", value: 60_000 },
+                { label: "5 минут", value: 300_000 },
+              ]}
+              style={{ width: 140 }}
+            />
+          </div>
           <Button
             block
             type="primary"
@@ -1503,7 +1594,7 @@ function App() {
                     <div className="meta-row">
                       <span className="meta-label">Автор:</span>
                       <span className="meta-value">
-                        {selectedTask.authorEmail || "Не указан"}
+                        {formatAuthor(selectedTask)}
                       </span>
                     </div>
                   </Space>
@@ -1650,30 +1741,35 @@ function App() {
         open={profileModalOpen}
         onCancel={() => setProfileModalOpen(false)}
         onOk={() => void handleUpdateProfile()}
+        confirmLoading={profileSaving}
         okText="Сохранить"
         cancelText="Отмена"
       >
-        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-          <div className="meta-row">
-            <span className="meta-label">Имя:</span>
+        <Form
+          className="profile-form"
+          layout="horizontal"
+          colon={false}
+          labelAlign="left"
+          labelCol={{ flex: "140px" }}
+          wrapperCol={{ flex: 1 }}
+        >
+          <Form.Item label="Имя">
             <Input
               placeholder="Имя"
               value={profileFirstName}
               onChange={(e) => setProfileFirstName(e.target.value)}
             />
-          </div>
-          <div className="meta-row">
-            <span className="meta-label">Фамилия:</span>
+          </Form.Item>
+          <Form.Item label="Фамилия">
             <Input
               placeholder="Фамилия"
               value={profileLastName}
               onChange={(e) => setProfileLastName(e.target.value)}
             />
-          </div>
-          <div className="meta-row">
-            <span className="meta-label">Юзернейм:</span>
+          </Form.Item>
+          <Form.Item label="Юзернейм">
             {user.username ? (
-              <span className="meta-value">{user.username}</span>
+              <Input value={user.username} disabled />
             ) : (
               <Input
                 placeholder="Юзернейм (указывается один раз)"
@@ -1683,30 +1779,32 @@ function App() {
                 autoCorrect="off"
               />
             )}
-          </div>
-          <div className="meta-row">
-            <span className="meta-label">Email:</span>
-            <span className="meta-value">{user.email}</span>
-          </div>
-          <div className="meta-row">
-            <span className="meta-label">Telegram:</span>
+          </Form.Item>
+          <Form.Item label="Email">
+            <Input value={user.email} disabled />
+          </Form.Item>
+          <Form.Item label="Telegram">
             <Input
               placeholder="Telegram (@username)"
               value={profileTelegram}
               onChange={(e) => setProfileTelegram(e.target.value)}
             />
-          </div>
-          <hr />
-          <h5>Смена пароля</h5>
-          <Input.Password
-            placeholder="Новый пароль (опционально)"
-            value={profilePassword}
-            onChange={(e) => setProfilePassword(e.target.value)}
-          />
-          <div className="muted-text">
-            Пароль минимум 6 символов. Оставьте пустым, если не хотите менять.
-          </div>
-        </Space>
+          </Form.Item>
+          <Divider style={{ margin: "12px 0" }} />
+          <Typography.Text type="secondary" style={{ display: "block" }}>
+            Смена пароля
+          </Typography.Text>
+          <Form.Item
+            label="Новый пароль"
+            extra="Пароль минимум 6 символов. Оставьте пустым, если не хотите менять."
+          >
+            <Input.Password
+              placeholder="Новый пароль (опционально)"
+              value={profilePassword}
+              onChange={(e) => setProfilePassword(e.target.value)}
+            />
+          </Form.Item>
+        </Form>
       </Modal>
       <Modal
         title={

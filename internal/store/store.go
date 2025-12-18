@@ -55,6 +55,8 @@ type Task struct {
 	CreatedAt   time.Time `json:"createdAt"`
 	CreatedBy   int64     `json:"createdBy"`
 	AuthorEmail string    `json:"authorEmail"`
+	AuthorFirst string    `json:"authorFirstName,omitempty"`
+	AuthorLast  string    `json:"authorLastName,omitempty"`
 }
 
 type TaskComment struct {
@@ -140,13 +142,15 @@ func (s *Store) InsertTask(title, description string, projectID, createdBy int64
 	id, _ := res.LastInsertId()
 	var created sql.NullInt64
 	var email sql.NullString
+	var first sql.NullString
+	var last sql.NullString
 	err = s.db.QueryRow(
-		`SELECT t.id, t.title, t.status, COALESCE(t.description, t.comment, ''), t.project_id, t.created_at, t.created_by, u.email
-		FROM tasks t
-		LEFT JOIN users u ON t.created_by = u.id
-		WHERE t.id = ?`,
+		`SELECT t.id, t.title, t.status, COALESCE(t.description, t.comment, ''), t.project_id, t.created_at, t.created_by, u.email, u.first_name, u.last_name
+			FROM tasks t
+			LEFT JOIN users u ON t.created_by = u.id
+			WHERE t.id = ?`,
 		id,
-	).Scan(&t.ID, &t.Title, &t.Status, &t.Description, &t.ProjectID, &t.CreatedAt, &created, &email)
+	).Scan(&t.ID, &t.Title, &t.Status, &t.Description, &t.ProjectID, &t.CreatedAt, &created, &email, &first, &last)
 	if err != nil {
 		return t, err
 	}
@@ -156,6 +160,12 @@ func (s *Store) InsertTask(title, description string, projectID, createdBy int64
 	}
 	if email.Valid {
 		t.AuthorEmail = email.String
+	}
+	if first.Valid {
+		t.AuthorFirst = first.String
+	}
+	if last.Valid {
+		t.AuthorLast = last.String
 	}
 	return t, nil
 }
@@ -177,13 +187,15 @@ func (s *Store) SetTaskStatus(id int64, status string) (Task, error) {
 
 	var created sql.NullInt64
 	var email sql.NullString
+	var first sql.NullString
+	var last sql.NullString
 	err = s.db.QueryRow(
-		`SELECT t.id, t.title, t.status, COALESCE(t.description, t.comment, ''), t.project_id, t.created_at, t.created_by, u.email
-		FROM tasks t
-		LEFT JOIN users u ON t.created_by = u.id
-		WHERE t.id = ?`,
+		`SELECT t.id, t.title, t.status, COALESCE(t.description, t.comment, ''), t.project_id, t.created_at, t.created_by, u.email, u.first_name, u.last_name
+			FROM tasks t
+			LEFT JOIN users u ON t.created_by = u.id
+			WHERE t.id = ?`,
 		id,
-	).Scan(&t.ID, &t.Title, &t.Status, &t.Description, &t.ProjectID, &t.CreatedAt, &created, &email)
+	).Scan(&t.ID, &t.Title, &t.Status, &t.Description, &t.ProjectID, &t.CreatedAt, &created, &email, &first, &last)
 	if err != nil {
 		return t, err
 	}
@@ -193,6 +205,12 @@ func (s *Store) SetTaskStatus(id int64, status string) (Task, error) {
 	}
 	if email.Valid {
 		t.AuthorEmail = email.String
+	}
+	if first.Valid {
+		t.AuthorFirst = first.String
+	}
+	if last.Valid {
+		t.AuthorLast = last.String
 	}
 	return t, nil
 }
@@ -209,13 +227,15 @@ func (s *Store) SetTaskDescription(id int64, description string) (Task, error) {
 	}
 	var created sql.NullInt64
 	var email sql.NullString
+	var first sql.NullString
+	var last sql.NullString
 	err = s.db.QueryRow(
-		`SELECT t.id, t.title, t.status, COALESCE(t.description, t.comment, ''), t.project_id, t.created_at, t.created_by, u.email
-		FROM tasks t
-		LEFT JOIN users u ON t.created_by = u.id
-		WHERE t.id = ?`,
+		`SELECT t.id, t.title, t.status, COALESCE(t.description, t.comment, ''), t.project_id, t.created_at, t.created_by, u.email, u.first_name, u.last_name
+			FROM tasks t
+			LEFT JOIN users u ON t.created_by = u.id
+			WHERE t.id = ?`,
 		id,
-	).Scan(&t.ID, &t.Title, &t.Status, &t.Description, &t.ProjectID, &t.CreatedAt, &created, &email)
+	).Scan(&t.ID, &t.Title, &t.Status, &t.Description, &t.ProjectID, &t.CreatedAt, &created, &email, &first, &last)
 	if err != nil {
 		return t, err
 	}
@@ -225,6 +245,12 @@ func (s *Store) SetTaskDescription(id int64, description string) (Task, error) {
 	}
 	if email.Valid {
 		t.AuthorEmail = email.String
+	}
+	if first.Valid {
+		t.AuthorFirst = first.String
+	}
+	if last.Valid {
+		t.AuthorLast = last.String
 	}
 	return t, nil
 }
@@ -251,13 +277,15 @@ func (s *Store) GetTask(id int64) (Task, error) {
 	var t Task
 	var created sql.NullInt64
 	var email sql.NullString
+	var first sql.NullString
+	var last sql.NullString
 	err := s.db.QueryRow(
-		`SELECT t.id, t.title, t.status, COALESCE(t.description, t.comment, ''), t.project_id, t.created_at, t.created_by, u.email
-		FROM tasks t
-		LEFT JOIN users u ON t.created_by = u.id
-		WHERE t.id = ?`,
+		`SELECT t.id, t.title, t.status, COALESCE(t.description, t.comment, ''), t.project_id, t.created_at, t.created_by, u.email, u.first_name, u.last_name
+			FROM tasks t
+			LEFT JOIN users u ON t.created_by = u.id
+			WHERE t.id = ?`,
 		id,
-	).Scan(&t.ID, &t.Title, &t.Status, &t.Description, &t.ProjectID, &t.CreatedAt, &created, &email)
+	).Scan(&t.ID, &t.Title, &t.Status, &t.Description, &t.ProjectID, &t.CreatedAt, &created, &email, &first, &last)
 	if err != nil {
 		return t, err
 	}
@@ -267,6 +295,12 @@ func (s *Store) GetTask(id int64) (Task, error) {
 	}
 	if email.Valid {
 		t.AuthorEmail = email.String
+	}
+	if first.Valid {
+		t.AuthorFirst = first.String
+	}
+	if last.Valid {
+		t.AuthorLast = last.String
 	}
 	return t, nil
 }
@@ -616,7 +650,7 @@ func (s *Store) projectExistsTx(tx *sql.Tx, id int64) (bool, error) {
 }
 
 func (s *Store) FetchTasks(projectID int64, status string, allowed map[int64]struct{}) ([]Task, error) {
-	query := `SELECT t.id, t.title, t.status, COALESCE(t.description, t.comment, ''), t.project_id, t.created_at, t.created_by, u.email FROM tasks t LEFT JOIN users u ON t.created_by = u.id`
+	query := `SELECT t.id, t.title, t.status, COALESCE(t.description, t.comment, ''), t.project_id, t.created_at, t.created_by, u.email, u.first_name, u.last_name FROM tasks t LEFT JOIN users u ON t.created_by = u.id`
 	conds := make([]string, 0)
 	args := make([]any, 0)
 
@@ -653,7 +687,9 @@ func (s *Store) FetchTasks(projectID int64, status string, allowed map[int64]str
 		var created time.Time
 		var authorID sql.NullInt64
 		var email sql.NullString
-		if err := rows.Scan(&t.ID, &t.Title, &t.Status, &t.Description, &t.ProjectID, &created, &authorID, &email); err != nil {
+		var first sql.NullString
+		var last sql.NullString
+		if err := rows.Scan(&t.ID, &t.Title, &t.Status, &t.Description, &t.ProjectID, &created, &authorID, &email, &first, &last); err != nil {
 			return nil, err
 		}
 		t.CreatedAt = created.UTC()
@@ -662,6 +698,12 @@ func (s *Store) FetchTasks(projectID int64, status string, allowed map[int64]str
 		}
 		if email.Valid {
 			t.AuthorEmail = email.String
+		}
+		if first.Valid {
+			t.AuthorFirst = first.String
+		}
+		if last.Valid {
+			t.AuthorLast = last.String
 		}
 		tasks = append(tasks, t)
 	}
