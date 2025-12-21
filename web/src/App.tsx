@@ -1024,7 +1024,9 @@ function App() {
     return (
       <Layout className="layout">
         <Layout.Header className="header">
-          <div className="brand">LiteTask</div>
+          <a href="/">
+            <div className="brand">LiteTask</div>
+          </a>
         </Layout.Header>
         <Layout.Content className="content">
           <Card className="auth-card" title="Войдите или зарегистрируйтесь">
