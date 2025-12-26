@@ -1,0 +1,16 @@
+services:
+  litetask:
+    build: .
+    image: litetask:latest
+    ports:
+      - "8080:8080"
+    environment:
+      AUTH_SECRET: "change-me-32-bytes-min"
+      ALLOW_REGISTRATION: "true"
+      DB_PATH: "/data/tasks.db"
+      PORT: "8080"
+    volumes:
+      - litetask-data:/data
+
+volumes:
+  litetask-data:
