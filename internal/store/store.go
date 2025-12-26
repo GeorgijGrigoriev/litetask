@@ -344,7 +344,7 @@ func (s *Store) DeleteProject(id int64) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer tx.Rollback() //nolint: errcheck
 
 	if _, err := tx.Exec(`DELETE FROM tasks WHERE project_id = ?`, id); err != nil {
 		return err
@@ -603,7 +603,7 @@ func (s *Store) SetUserProjects(userID int64, projectIDs []int64) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer tx.Rollback() //nolint:errcheck
 
 	for _, pid := range projectIDs {
 		ok, err := s.projectExistsTx(tx, pid)
