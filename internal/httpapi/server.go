@@ -820,7 +820,7 @@ func (s *Server) deleteTaskComment(w http.ResponseWriter, r *http.Request, taskI
 		http.Error(w, "comment does not belong to task", http.StatusBadRequest)
 		return
 	}
-	if auth.user.Role != "admin" && comment.AuthorID != auth.user.ID {
+	if comment.AuthorID != auth.user.ID {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
