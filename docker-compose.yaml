@@ -1,7 +1,7 @@
 services:
   litetask:
     build: .
-    image: litetask:latest
+    image: ghcr.io/georgijgrigoriev/litetask:v0.0.1
     ports:
       - "8080:8080"
     environment:
@@ -14,3 +14,8 @@ services:
 
 volumes:
   litetask-data:
+
+# Alternatively if you dont like to use docker volumes, you
+# can use a bind mount instead:
+#    volumes:
+#      - ./data:/data
