@@ -40,7 +40,13 @@ func main() {
 	server := httpapi.New(st, secret, allowRegistration, "web/dist")
 
 	log.Printf("listening on %s", defaultAddr)
-	if err := http.ListenAndServe(defaultAddr, server.Routes()); err != nil {
+
+	listenAddr := defaultAddr
+
+	if os.Getenv("PORT") != "" {
+		listenAddr = os.Getenv("PORT")
+	}
+	if err := http.ListenAndServe(listenAddr, server.Routes()); err != nil {
 		log.Fatalf("server error: %v", err)
 	}
 }
