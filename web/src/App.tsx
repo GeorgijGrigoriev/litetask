@@ -5,6 +5,7 @@ import "./App.css";
 import api from "./api";
 import { AUTO_REFRESH_INTERVAL_STORAGE_KEY } from "./constants";
 import AuthCard from "./components/auth/AuthCard";
+import GitHubSettings from "./components/admin/GitHubSettings";
 import PasswordModal from "./components/admin/PasswordModal";
 import UserForm from "./components/admin/UserForm";
 import UserInfoModal from "./components/admin/UserInfoModal";
@@ -985,6 +986,7 @@ function App() {
               onDeleteProject={handleDeleteProject}
               deletingProject={deletingProject}
             />
+            <GitHubSettings projects={projects} />
             <Card className="create-card" title="Пользователи">
               <UserForm
                 creatingUser={creatingUser}

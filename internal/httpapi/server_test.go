@@ -33,7 +33,7 @@ func openTestStore(t *testing.T) *store.Store {
 func newTestServer(t *testing.T) (*Server, *store.Store) {
 	t.Helper()
 	st := openTestStore(t)
-	return New(st, testSecret, true, ""), st
+	return New(st, testSecret, true, "", "", ""), st
 }
 
 func doRequest(t *testing.T, srv *Server, method, path, body string, cookie *http.Cookie) *http.Response {
@@ -168,7 +168,7 @@ func TestRegisterDuplicateEmail(t *testing.T) {
 
 func TestRegisterDisabled(t *testing.T) {
 	st := openTestStore(t)
-	srv := New(st, testSecret, false, "")
+	srv := New(st, testSecret, false, "", "", "")
 	resp := doRequest(t, srv, http.MethodPost, "/api/auth/register",
 		jsonBody(map[string]string{"email": "x@example.com", "password": "pass123"}), nil)
 	if resp.StatusCode != http.StatusForbidden {

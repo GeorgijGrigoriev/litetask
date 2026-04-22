@@ -57,9 +57,12 @@ func main() {
 		listenAddr = port
 	}
 
+	githubClientID := os.Getenv("GITHUB_CLIENT_ID")
+	githubClientSecret := os.Getenv("GITHUB_CLIENT_SECRET")
+
 	srv := &http.Server{
 		Addr:         listenAddr,
-		Handler:      httpapi.New(st, secret, allowRegistration, "web/dist").Routes(),
+		Handler:      httpapi.New(st, secret, allowRegistration, "web/dist", githubClientID, githubClientSecret).Routes(),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  60 * time.Second,
