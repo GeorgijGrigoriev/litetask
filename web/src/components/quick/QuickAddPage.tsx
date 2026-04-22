@@ -5,7 +5,6 @@ type QuickAddPageProps = {
   description: string;
   creating: boolean;
   hasProject: boolean;
-  defaultProjectName?: string | null;
   onTitleChange: (value: string) => void;
   onDescriptionChange: (value: string) => void;
   onSubmit: () => void;
@@ -17,7 +16,6 @@ function QuickAddPage({
   description,
   creating,
   hasProject,
-  defaultProjectName,
   onTitleChange,
   onDescriptionChange,
   onSubmit,
@@ -26,16 +24,19 @@ function QuickAddPage({
   return (
     <Card className="quick-card" title="Быстрый ввод задачи">
       {!hasProject ? (
-        <Empty
-          description="Нет доступных проектов. Создайте проект в настройках."
-        />
+        <>
+          <Empty description="Проект «Входящие» недоступен. Обратитесь к администратору." />
+          <div style={{ marginTop: 12 }}>
+            <Button type="default" onClick={onGoToBoard}>
+              К списку задач
+            </Button>
+          </div>
+        </>
       ) : (
         <Space direction="vertical" size="middle" className="quick-form">
-          {defaultProjectName && (
-            <Typography.Text type="secondary">
-              Проект по умолчанию: {defaultProjectName}
-            </Typography.Text>
-          )}
+          <Typography.Text type="secondary">
+            Проект: <strong>Входящие</strong>
+          </Typography.Text>
           <Input
             placeholder="Тема"
             value={title}
@@ -63,13 +64,6 @@ function QuickAddPage({
             </Button>
           </Space>
         </Space>
-      )}
-      {!hasProject && (
-        <div style={{ marginTop: 12 }}>
-          <Button type="default" onClick={onGoToBoard}>
-            К списку задач
-          </Button>
-        </div>
       )}
     </Card>
   );

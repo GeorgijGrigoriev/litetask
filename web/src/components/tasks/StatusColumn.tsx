@@ -22,6 +22,7 @@ function StatusColumn({ status, tasks, onSelectTask }: StatusColumnProps) {
 
   return (
     <Card
+      data-status={status}
       title={
         <Space size="small">
           {statusMeta[status].icon}
@@ -41,6 +42,7 @@ function StatusColumn({ status, tasks, onSelectTask }: StatusColumnProps) {
         {tasks.map((task) => (
           <Card
             key={task.id}
+            data-status={task.status}
             size="small"
             title={task.title}
             className="task-card"
@@ -52,13 +54,13 @@ function StatusColumn({ status, tasks, onSelectTask }: StatusColumnProps) {
               </Tag>
             }
           >
-            <Space direction="vertical" size={4}>
+            <Space direction="vertical" size={2}>
               <div className="meta-row">
-                <span className="meta-label">Создана:</span>
+                <span className="meta-label">created</span>
                 <span className="meta-value">{formatDate(task.createdAt)}</span>
               </div>
               <div className="meta-row">
-                <span className="meta-label">Автор:</span>
+                <span className="meta-label">by</span>
                 <span className="meta-value">{formatAuthor(task)}</span>
               </div>
             </Space>

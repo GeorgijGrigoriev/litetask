@@ -55,7 +55,7 @@ function ProjectManagerCard({
             onChange={onProjectChange}
             options={projects.map((p) => ({
               value: p.id,
-              label: p.name,
+              label: p.isInbox ? "Входящие" : p.name,
             }))}
             style={{ minWidth: 240 }}
           />

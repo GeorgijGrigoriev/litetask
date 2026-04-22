@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/base64"
@@ -19,9 +20,10 @@ import (
 )
 
 const (
-	DefaultDBPath      = "tasks.db"
-	DefaultProjectID   = 1
-	DefaultProjectName = "Общий"
+	DefaultDBPath           = "tasks.db"
+	DefaultProjectID        = 1
+	DefaultProjectName      = "Общий"
+	DefaultInboxProjectName = "Входящие"
 )
 
 var (
@@ -40,10 +42,11 @@ var (
 		"in_progress": "В работе",
 		"done":        "Готова",
 	}
-	ErrInvalidStatus = errors.New("invalid status")
-	ErrInvalidRole   = errors.New("invalid role")
-	ErrLastAdmin     = errors.New("cannot remove last admin")
-	ErrUsernameSet   = errors.New("username already set")
+	ErrInvalidStatus    = errors.New("invalid status")
+	ErrInvalidRole      = errors.New("invalid role")
+	ErrLastAdmin        = errors.New("cannot remove last admin")
+	ErrUsernameSet      = errors.New("username already set")
+	ErrProtectedProject = errors.New("cannot delete protected project")
 )
 
 type Task struct {
@@ -71,6 +74,8 @@ type TaskComment struct {
 type Project struct {
 	ID        int64     `json:"id"`
 	Name      string    `json:"name"`
+	IsInbox   bool      `json:"isInbox"`
+	OwnerID   int64     `json:"-"`
 	CreatedAt time.Time `json:"createdAt"`
 }
 
@@ -101,7 +106,7 @@ func Open(path string) (*Store, error) {
 	}
 
 	if err := setupSchema(db); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, err
 	}
 
@@ -119,9 +124,9 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-func (s *Store) InsertTask(title, description string, projectID, createdBy int64) (Task, error) {
+func (s *Store) InsertTask(ctx context.Context, title, description, authorLabel string, projectID, createdBy int64) (Task, error) {
 	var t Task
-	ok, err := s.ProjectExists(projectID)
+	ok, err := s.ProjectExists(ctx, projectID)
 	if err != nil {
 		return t, err
 	}
@@ -129,158 +134,92 @@ func (s *Store) InsertTask(title, description string, projectID, createdBy int64
 		return t, fmt.Errorf("project not found")
 	}
 
-	res, err := s.db.Exec(
-		`INSERT INTO tasks (title, status, description, project_id, created_by) VALUES (?, 'new', ?, ?, ?)`,
+	res, err := s.db.ExecContext(ctx,
+		`INSERT INTO tasks (title, status, description, author_label, project_id, created_by) VALUES (?, 'new', ?, ?, ?, ?)`,
 		title,
 		description,
+		sql.NullString{String: authorLabel, Valid: authorLabel != ""},
 		projectID,
 		nullableInt64(createdBy),
 	)
 	if err != nil {
 		return t, err
 	}
-	id, _ := res.LastInsertId()
-	var created sql.NullInt64
-	var email sql.NullString
-	var first sql.NullString
-	var last sql.NullString
-	err = s.db.QueryRow(
-		`SELECT t.id, t.title, t.status, COALESCE(t.description, t.comment, ''), t.project_id, t.created_at, t.created_by, u.email, u.first_name, u.last_name
-			FROM tasks t
-			LEFT JOIN users u ON t.created_by = u.id
-			WHERE t.id = ?`,
-		id,
-	).Scan(&t.ID, &t.Title, &t.Status, &t.Description, &t.ProjectID, &t.CreatedAt, &created, &email, &first, &last)
+	id, err := res.LastInsertId()
 	if err != nil {
-		return t, err
+		return t, fmt.Errorf("lastInsertId: %w", err)
 	}
-	t.CreatedAt = t.CreatedAt.UTC()
-	if created.Valid {
-		t.CreatedBy = created.Int64
-	}
-	if email.Valid {
-		t.AuthorEmail = email.String
-	}
-	if first.Valid {
-		t.AuthorFirst = first.String
-	}
-	if last.Valid {
-		t.AuthorLast = last.String
-	}
-	return t, nil
+	return s.scanTask(ctx, id)
 }
 
-func (s *Store) SetTaskStatus(id int64, status string) (Task, error) {
+func (s *Store) SetTaskStatus(ctx context.Context, id int64, status string) (Task, error) {
 	var t Task
 	if _, ok := allowedStatuses[status]; !ok {
 		return t, ErrInvalidStatus
 	}
 
-	res, err := s.db.Exec(`UPDATE tasks SET status = ? WHERE id = ?`, status, id)
+	res, err := s.db.ExecContext(ctx, `UPDATE tasks SET status = ? WHERE id = ?`, status, id)
 	if err != nil {
 		return t, err
 	}
-	affected, _ := res.RowsAffected()
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return t, fmt.Errorf("rowsAffected: %w", err)
+	}
 	if affected == 0 {
 		return t, sql.ErrNoRows
 	}
-
-	var created sql.NullInt64
-	var email sql.NullString
-	var first sql.NullString
-	var last sql.NullString
-	err = s.db.QueryRow(
-		`SELECT t.id, t.title, t.status, COALESCE(t.description, t.comment, ''), t.project_id, t.created_at, t.created_by, u.email, u.first_name, u.last_name
-			FROM tasks t
-			LEFT JOIN users u ON t.created_by = u.id
-			WHERE t.id = ?`,
-		id,
-	).Scan(&t.ID, &t.Title, &t.Status, &t.Description, &t.ProjectID, &t.CreatedAt, &created, &email, &first, &last)
-	if err != nil {
-		return t, err
-	}
-	t.CreatedAt = t.CreatedAt.UTC()
-	if created.Valid {
-		t.CreatedBy = created.Int64
-	}
-	if email.Valid {
-		t.AuthorEmail = email.String
-	}
-	if first.Valid {
-		t.AuthorFirst = first.String
-	}
-	if last.Valid {
-		t.AuthorLast = last.String
-	}
-	return t, nil
+	return s.scanTask(ctx, id)
 }
 
-func (s *Store) SetTaskDescription(id int64, description string) (Task, error) {
+func (s *Store) SetTaskDescription(ctx context.Context, id int64, description string) (Task, error) {
 	var t Task
-	res, err := s.db.Exec(`UPDATE tasks SET description = ? WHERE id = ?`, description, id)
+	res, err := s.db.ExecContext(ctx, `UPDATE tasks SET description = ? WHERE id = ?`, description, id)
 	if err != nil {
 		return t, err
 	}
-	affected, _ := res.RowsAffected()
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return t, fmt.Errorf("rowsAffected: %w", err)
+	}
 	if affected == 0 {
 		return t, sql.ErrNoRows
 	}
-	var created sql.NullInt64
-	var email sql.NullString
-	var first sql.NullString
-	var last sql.NullString
-	err = s.db.QueryRow(
-		`SELECT t.id, t.title, t.status, COALESCE(t.description, t.comment, ''), t.project_id, t.created_at, t.created_by, u.email, u.first_name, u.last_name
-			FROM tasks t
-			LEFT JOIN users u ON t.created_by = u.id
-			WHERE t.id = ?`,
-		id,
-	).Scan(&t.ID, &t.Title, &t.Status, &t.Description, &t.ProjectID, &t.CreatedAt, &created, &email, &first, &last)
-	if err != nil {
-		return t, err
-	}
-	t.CreatedAt = t.CreatedAt.UTC()
-	if created.Valid {
-		t.CreatedBy = created.Int64
-	}
-	if email.Valid {
-		t.AuthorEmail = email.String
-	}
-	if first.Valid {
-		t.AuthorFirst = first.String
-	}
-	if last.Valid {
-		t.AuthorLast = last.String
-	}
-	return t, nil
+	return s.scanTask(ctx, id)
 }
 
-func (s *Store) DeleteTask(id int64) error {
-	res, err := s.db.Exec(`DELETE FROM tasks WHERE id = ?`, id)
+func (s *Store) DeleteTask(ctx context.Context, id int64) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM tasks WHERE id = ?`, id)
 	if err != nil {
 		return err
 	}
-	affected, _ := res.RowsAffected()
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rowsAffected: %w", err)
+	}
 	if affected == 0 {
 		return sql.ErrNoRows
 	}
 	return nil
 }
 
-func (s *Store) ProjectExists(id int64) (bool, error) {
+func (s *Store) ProjectExists(ctx context.Context, id int64) (bool, error) {
 	var exists bool
-	err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM projects WHERE id = ?)`, id).Scan(&exists)
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM projects WHERE id = ?)`, id).Scan(&exists)
 	return exists, err
 }
 
-func (s *Store) GetTask(id int64) (Task, error) {
+func (s *Store) GetTask(ctx context.Context, id int64) (Task, error) {
+	return s.scanTask(ctx, id)
+}
+
+// scanTask fetches a single task by ID including author info.
+func (s *Store) scanTask(ctx context.Context, id int64) (Task, error) {
 	var t Task
 	var created sql.NullInt64
-	var email sql.NullString
-	var first sql.NullString
-	var last sql.NullString
-	err := s.db.QueryRow(
-		`SELECT t.id, t.title, t.status, COALESCE(t.description, t.comment, ''), t.project_id, t.created_at, t.created_by, u.email, u.first_name, u.last_name
+	var email, first, last sql.NullString
+	err := s.db.QueryRowContext(ctx,
+		`SELECT t.id, t.title, t.status, COALESCE(t.description, t.comment, ''), t.project_id, t.created_at, t.created_by, COALESCE(t.author_label, u.email, ''), u.first_name, u.last_name
 			FROM tasks t
 			LEFT JOIN users u ON t.created_by = u.id
 			WHERE t.id = ?`,
@@ -305,14 +244,17 @@ func (s *Store) GetTask(id int64) (Task, error) {
 	return t, nil
 }
 
-func (s *Store) CreateProject(name string) (Project, error) {
+func (s *Store) CreateProject(ctx context.Context, name string) (Project, error) {
 	var p Project
-	res, err := s.db.Exec(`INSERT INTO projects (name) VALUES (?)`, name)
+	res, err := s.db.ExecContext(ctx, `INSERT INTO projects (name) VALUES (?)`, name)
 	if err != nil {
 		return p, err
 	}
-	id, _ := res.LastInsertId()
-	err = s.db.QueryRow(`SELECT id, name, created_at FROM projects WHERE id = ?`, id).
+	id, err := res.LastInsertId()
+	if err != nil {
+		return p, fmt.Errorf("lastInsertId: %w", err)
+	}
+	err = s.db.QueryRowContext(ctx, `SELECT id, name, created_at FROM projects WHERE id = ?`, id).
 		Scan(&p.ID, &p.Name, &p.CreatedAt)
 	if err != nil {
 		return p, err
@@ -321,40 +263,59 @@ func (s *Store) CreateProject(name string) (Project, error) {
 	return p, nil
 }
 
-func (s *Store) ListProjects() ([]Project, error) {
-	rows, err := s.db.Query(`SELECT id, name, created_at FROM projects ORDER BY created_at DESC`)
+func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, name, COALESCE(is_inbox, 0), COALESCE(owner_id, 0), created_at FROM projects ORDER BY is_inbox DESC, created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck
 	projects := make([]Project, 0)
 	for rows.Next() {
 		var p Project
-		if err := rows.Scan(&p.ID, &p.Name, &p.CreatedAt); err != nil {
+		var isInbox int
+		if err := rows.Scan(&p.ID, &p.Name, &isInbox, &p.OwnerID, &p.CreatedAt); err != nil {
 			return nil, err
 		}
 		p.CreatedAt = p.CreatedAt.UTC()
+		p.IsInbox = isInbox == 1
 		projects = append(projects, p)
 	}
 	return projects, nil
 }
 
-func (s *Store) DeleteProject(id int64) error {
-	tx, err := s.db.Begin()
+func (s *Store) DeleteProject(ctx context.Context, id int64) error {
+	if id == DefaultProjectID {
+		return ErrProtectedProject
+	}
+	var isInbox int
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(is_inbox, 0) FROM projects WHERE id = ?`, id).Scan(&isInbox); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return sql.ErrNoRows
+		}
+		return err
+	}
+	if isInbox == 1 {
+		return ErrProtectedProject
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback() //nolint: errcheck
+	defer tx.Rollback() //nolint:errcheck
 
-	if _, err := tx.Exec(`DELETE FROM tasks WHERE project_id = ?`, id); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM tasks WHERE project_id = ?`, id); err != nil {
 		return err
 	}
 
-	res, err := tx.Exec(`DELETE FROM projects WHERE id = ?`, id)
+	res, err := tx.ExecContext(ctx, `DELETE FROM projects WHERE id = ?`, id)
 	if err != nil {
 		return err
 	}
-	affected, _ := res.RowsAffected()
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rowsAffected: %w", err)
+	}
 	if affected == 0 {
 		return sql.ErrNoRows
 	}
@@ -362,7 +323,7 @@ func (s *Store) DeleteProject(id int64) error {
 	return tx.Commit()
 }
 
-func (s *Store) CreateUser(email, username, password, role, firstName, lastName string) (User, error) {
+func (s *Store) CreateUser(ctx context.Context, email, username, password, role, firstName, lastName string) (User, error) {
 	var u User
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
@@ -376,7 +337,7 @@ func (s *Store) CreateUser(email, username, password, role, firstName, lastName 
 			return u, err
 		}
 	}
-	res, err := s.db.Exec(
+	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO users (email, username, password_hash, role, first_name, last_name, telegram) VALUES (?, ?, ?, ?, ?, ?, '')`,
 		email,
 		nullableString(username),
@@ -388,22 +349,31 @@ func (s *Store) CreateUser(email, username, password, role, firstName, lastName 
 	if err != nil {
 		return u, err
 	}
-	id, _ := res.LastInsertId()
-	err = s.db.QueryRow(`SELECT id, email, COALESCE(username, ''), password_hash, role, created_at, telegram, first_name, last_name FROM users WHERE id = ?`, id).
+	id, err := res.LastInsertId()
+	if err != nil {
+		return u, fmt.Errorf("lastInsertId: %w", err)
+	}
+	err = s.db.QueryRowContext(ctx, `SELECT id, email, COALESCE(username, ''), password_hash, role, created_at, telegram, first_name, last_name FROM users WHERE id = ?`, id).
 		Scan(&u.ID, &u.Email, &u.Username, &u.Password, &u.Role, &u.CreatedAt, &u.Telegram, &u.FirstName, &u.LastName)
 	if err != nil {
 		return u, err
 	}
 	u.CreatedAt = u.CreatedAt.UTC()
-	if err := s.SetUserProjects(u.ID, []int64{DefaultProjectID}); err != nil {
-		log.Printf("warning: failed to assign default project: %v", err)
+	projectIDs := []int64{DefaultProjectID}
+	if inboxID, err := s.EnsureUserInbox(ctx, u.ID); err != nil {
+		log.Printf("warning: failed to create inbox project: %v", err)
+	} else if inboxID > 0 {
+		projectIDs = append(projectIDs, inboxID)
+	}
+	if err := s.SetUserProjects(ctx, u.ID, projectIDs); err != nil {
+		log.Printf("warning: failed to assign default projects: %v", err)
 	}
 	return u, nil
 }
 
-func (s *Store) GetUserByEmail(email string) (User, error) {
+func (s *Store) GetUserByEmail(ctx context.Context, email string) (User, error) {
 	var u User
-	err := s.db.QueryRow(`SELECT id, email, COALESCE(username, ''), password_hash, role, created_at, telegram, first_name, last_name FROM users WHERE email = ?`, email).
+	err := s.db.QueryRowContext(ctx, `SELECT id, email, COALESCE(username, ''), password_hash, role, created_at, telegram, first_name, last_name FROM users WHERE email = ?`, email).
 		Scan(&u.ID, &u.Email, &u.Username, &u.Password, &u.Role, &u.CreatedAt, &u.Telegram, &u.FirstName, &u.LastName)
 	if err != nil {
 		return u, err
@@ -412,10 +382,10 @@ func (s *Store) GetUserByEmail(email string) (User, error) {
 	return u, nil
 }
 
-func (s *Store) GetUserByEmailOrUsername(login string) (User, error) {
+func (s *Store) GetUserByEmailOrUsername(ctx context.Context, login string) (User, error) {
 	var u User
 	login = strings.TrimSpace(strings.ToLower(login))
-	err := s.db.QueryRow(
+	err := s.db.QueryRowContext(ctx,
 		`SELECT id, email, COALESCE(username, ''), password_hash, role, created_at, telegram, first_name, last_name
 		FROM users
 		WHERE email = ? OR username = ?
@@ -431,9 +401,9 @@ func (s *Store) GetUserByEmailOrUsername(login string) (User, error) {
 	return u, nil
 }
 
-func (s *Store) GetUserByID(id int64) (User, error) {
+func (s *Store) GetUserByID(ctx context.Context, id int64) (User, error) {
 	var u User
-	err := s.db.QueryRow(`SELECT id, email, COALESCE(username, ''), password_hash, role, created_at, telegram, first_name, last_name FROM users WHERE id = ?`, id).
+	err := s.db.QueryRowContext(ctx, `SELECT id, email, COALESCE(username, ''), password_hash, role, created_at, telegram, first_name, last_name FROM users WHERE id = ?`, id).
 		Scan(&u.ID, &u.Email, &u.Username, &u.Password, &u.Role, &u.CreatedAt, &u.Telegram, &u.FirstName, &u.LastName)
 	if err != nil {
 		return u, err
@@ -442,12 +412,12 @@ func (s *Store) GetUserByID(id int64) (User, error) {
 	return u, nil
 }
 
-func (s *Store) ListUsers() ([]User, error) {
-	rows, err := s.db.Query(`SELECT id, email, COALESCE(username, ''), password_hash, role, created_at, telegram, first_name, last_name FROM users ORDER BY created_at DESC`)
+func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, email, COALESCE(username, ''), password_hash, role, created_at, telegram, first_name, last_name FROM users ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck
 	users := make([]User, 0)
 	for rows.Next() {
 		var u User
@@ -460,7 +430,7 @@ func (s *Store) ListUsers() ([]User, error) {
 	return users, nil
 }
 
-func (s *Store) SetUsernameOnce(id int64, username string) (User, error) {
+func (s *Store) SetUsernameOnce(ctx context.Context, id int64, username string) (User, error) {
 	username = strings.TrimSpace(strings.ToLower(username))
 	if username == "" {
 		return User{}, errors.New("username required")
@@ -469,7 +439,7 @@ func (s *Store) SetUsernameOnce(id int64, username string) (User, error) {
 		return User{}, err
 	}
 
-	res, err := s.db.Exec(
+	res, err := s.db.ExecContext(ctx,
 		`UPDATE users
 		SET username = ?
 		WHERE id = ? AND (username IS NULL OR username = '')`,
@@ -479,10 +449,13 @@ func (s *Store) SetUsernameOnce(id int64, username string) (User, error) {
 	if err != nil {
 		return User{}, err
 	}
-	affected, _ := res.RowsAffected()
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return User{}, fmt.Errorf("rowsAffected: %w", err)
+	}
 	if affected == 0 {
 		var current sql.NullString
-		if err := s.db.QueryRow(`SELECT username FROM users WHERE id = ?`, id).Scan(&current); err != nil {
+		if err := s.db.QueryRowContext(ctx, `SELECT username FROM users WHERE id = ?`, id).Scan(&current); err != nil {
 			return User{}, err
 		}
 		if current.Valid && strings.TrimSpace(current.String) != "" {
@@ -490,21 +463,21 @@ func (s *Store) SetUsernameOnce(id int64, username string) (User, error) {
 		}
 		return User{}, sql.ErrNoRows
 	}
-	return s.GetUserByID(id)
+	return s.GetUserByID(ctx, id)
 }
 
-func (s *Store) UpdateUserRole(id int64, role string) (User, error) {
+func (s *Store) UpdateUserRole(ctx context.Context, id int64, role string) (User, error) {
 	if _, ok := allowedRoles[role]; !ok {
 		return User{}, ErrInvalidRole
 	}
 
 	var currentRole string
-	if err := s.db.QueryRow(`SELECT role FROM users WHERE id = ?`, id).Scan(&currentRole); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT role FROM users WHERE id = ?`, id).Scan(&currentRole); err != nil {
 		return User{}, err
 	}
 
 	if currentRole == "admin" && role != "admin" {
-		count, err := s.countAdmins()
+		count, err := s.countAdmins(ctx)
 		if err != nil {
 			return User{}, err
 		}
@@ -513,25 +486,28 @@ func (s *Store) UpdateUserRole(id int64, role string) (User, error) {
 		}
 	}
 
-	res, err := s.db.Exec(`UPDATE users SET role = ? WHERE id = ?`, role, id)
+	res, err := s.db.ExecContext(ctx, `UPDATE users SET role = ? WHERE id = ?`, role, id)
 	if err != nil {
 		return User{}, err
 	}
-	affected, _ := res.RowsAffected()
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return User{}, fmt.Errorf("rowsAffected: %w", err)
+	}
 	if affected == 0 {
 		return User{}, sql.ErrNoRows
 	}
 
-	return s.GetUserByID(id)
+	return s.GetUserByID(ctx, id)
 }
 
-func (s *Store) countAdmins() (int, error) {
+func (s *Store) countAdmins(ctx context.Context) (int, error) {
 	var count int
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM users WHERE role = 'admin'`).Scan(&count)
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE role = 'admin'`).Scan(&count)
 	return count, err
 }
 
-func (s *Store) UpdateUserPassword(id int64, password string) (User, error) {
+func (s *Store) UpdateUserPassword(ctx context.Context, id int64, password string) (User, error) {
 	if len(password) < 6 {
 		return User{}, errors.New("password too short")
 	}
@@ -539,20 +515,23 @@ func (s *Store) UpdateUserPassword(id int64, password string) (User, error) {
 	if err != nil {
 		return User{}, err
 	}
-	res, err := s.db.Exec(`UPDATE users SET password_hash = ? WHERE id = ?`, string(hash), id)
+	res, err := s.db.ExecContext(ctx, `UPDATE users SET password_hash = ? WHERE id = ?`, string(hash), id)
 	if err != nil {
 		return User{}, err
 	}
-	affected, _ := res.RowsAffected()
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return User{}, fmt.Errorf("rowsAffected: %w", err)
+	}
 	if affected == 0 {
 		return User{}, sql.ErrNoRows
 	}
-	return s.GetUserByID(id)
+	return s.GetUserByID(ctx, id)
 }
 
-func (s *Store) UpdateUserProfile(id int64, password *string, telegram *string, firstName *string, lastName *string) (User, error) {
+func (s *Store) UpdateUserProfile(ctx context.Context, id int64, password *string, telegram *string, firstName *string, lastName *string) (User, error) {
 	if password == nil && telegram == nil && firstName == nil && lastName == nil {
-		return s.GetUserByID(id)
+		return s.GetUserByID(ctx, id)
 	}
 	sets := make([]string, 0)
 	args := make([]any, 0)
@@ -587,26 +566,29 @@ func (s *Store) UpdateUserProfile(id int64, password *string, telegram *string, 
 	args = append(args, id)
 
 	query := `UPDATE users SET ` + strings.Join(sets, ", ") + ` WHERE id = ?`
-	res, err := s.db.Exec(query, args...)
+	res, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return User{}, err
 	}
-	affected, _ := res.RowsAffected()
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return User{}, fmt.Errorf("rowsAffected: %w", err)
+	}
 	if affected == 0 {
 		return User{}, sql.ErrNoRows
 	}
-	return s.GetUserByID(id)
+	return s.GetUserByID(ctx, id)
 }
 
-func (s *Store) SetUserProjects(userID int64, projectIDs []int64) error {
-	tx, err := s.db.Begin()
+func (s *Store) SetUserProjects(ctx context.Context, userID int64, projectIDs []int64) error {
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback() //nolint:errcheck
 
 	for _, pid := range projectIDs {
-		ok, err := s.projectExistsTx(tx, pid)
+		ok, err := s.projectExistsTx(ctx, tx, pid)
 		if err != nil {
 			return err
 		}
@@ -615,23 +597,23 @@ func (s *Store) SetUserProjects(userID int64, projectIDs []int64) error {
 		}
 	}
 
-	if _, err := tx.Exec(`DELETE FROM user_projects WHERE user_id = ?`, userID); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM user_projects WHERE user_id = ?`, userID); err != nil {
 		return err
 	}
 	for _, pid := range projectIDs {
-		if _, err := tx.Exec(`INSERT INTO user_projects (user_id, project_id) VALUES (?, ?)`, userID, pid); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO user_projects (user_id, project_id) VALUES (?, ?)`, userID, pid); err != nil {
 			return err
 		}
 	}
 	return tx.Commit()
 }
 
-func (s *Store) GetUserProjects(userID int64) ([]int64, error) {
-	rows, err := s.db.Query(`SELECT project_id FROM user_projects WHERE user_id = ? ORDER BY project_id`, userID)
+func (s *Store) GetUserProjects(ctx context.Context, userID int64) ([]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT project_id FROM user_projects WHERE user_id = ? ORDER BY project_id`, userID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck
 	var ids []int64
 	for rows.Next() {
 		var id int64
@@ -643,14 +625,14 @@ func (s *Store) GetUserProjects(userID int64) ([]int64, error) {
 	return ids, nil
 }
 
-func (s *Store) projectExistsTx(tx *sql.Tx, id int64) (bool, error) {
+func (s *Store) projectExistsTx(ctx context.Context, tx *sql.Tx, id int64) (bool, error) {
 	var exists bool
-	err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM projects WHERE id = ?)`, id).Scan(&exists)
+	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM projects WHERE id = ?)`, id).Scan(&exists)
 	return exists, err
 }
 
-func (s *Store) FetchTasks(projectID int64, status string, allowed map[int64]struct{}) ([]Task, error) {
-	query := `SELECT t.id, t.title, t.status, COALESCE(t.description, t.comment, ''), t.project_id, t.created_at, t.created_by, u.email, u.first_name, u.last_name FROM tasks t LEFT JOIN users u ON t.created_by = u.id`
+func (s *Store) FetchTasks(ctx context.Context, projectID int64, status string, allowed map[int64]struct{}) ([]Task, error) {
+	query := `SELECT t.id, t.title, t.status, COALESCE(t.description, t.comment, ''), t.project_id, t.created_at, t.created_by, COALESCE(t.author_label, u.email, ''), u.first_name, u.last_name FROM tasks t LEFT JOIN users u ON t.created_by = u.id`
 	conds := make([]string, 0)
 	args := make([]any, 0)
 
@@ -675,20 +657,18 @@ func (s *Store) FetchTasks(projectID int64, status string, allowed map[int64]str
 	}
 	query += " ORDER BY t.created_at DESC"
 
-	rows, err := s.db.Query(query, args...)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck
 
 	tasks := make([]Task, 0)
 	for rows.Next() {
 		var t Task
 		var created time.Time
 		var authorID sql.NullInt64
-		var email sql.NullString
-		var first sql.NullString
-		var last sql.NullString
+		var email, first, last sql.NullString
 		if err := rows.Scan(&t.ID, &t.Title, &t.Status, &t.Description, &t.ProjectID, &created, &authorID, &email, &first, &last); err != nil {
 			return nil, err
 		}
@@ -710,9 +690,9 @@ func (s *Store) FetchTasks(projectID int64, status string, allowed map[int64]str
 	return tasks, nil
 }
 
-func (s *Store) AddTaskComment(taskID int64, body string, authorID int64) (TaskComment, error) {
+func (s *Store) AddTaskComment(ctx context.Context, taskID int64, body string, authorID int64) (TaskComment, error) {
 	var c TaskComment
-	res, err := s.db.Exec(
+	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO task_comments (task_id, body, author_id) VALUES (?, ?, ?)`,
 		taskID,
 		body,
@@ -721,10 +701,13 @@ func (s *Store) AddTaskComment(taskID int64, body string, authorID int64) (TaskC
 	if err != nil {
 		return c, err
 	}
-	id, _ := res.LastInsertId()
+	id, err := res.LastInsertId()
+	if err != nil {
+		return c, fmt.Errorf("lastInsertId: %w", err)
+	}
 	var created sql.NullInt64
 	var email sql.NullString
-	err = s.db.QueryRow(
+	err = s.db.QueryRowContext(ctx,
 		`SELECT c.id, c.task_id, c.body, c.author_id, c.created_at, u.email
 		FROM task_comments c
 		LEFT JOIN users u ON c.author_id = u.id
@@ -744,19 +727,19 @@ func (s *Store) AddTaskComment(taskID int64, body string, authorID int64) (TaskC
 	return c, nil
 }
 
-func (s *Store) ListTaskComments(taskID int64) ([]TaskComment, error) {
-	commentsMap, err := s.ListCommentsByTaskIDs([]int64{taskID})
+func (s *Store) ListTaskComments(ctx context.Context, taskID int64) ([]TaskComment, error) {
+	commentsMap, err := s.ListCommentsByTaskIDs(ctx, []int64{taskID})
 	if err != nil {
 		return nil, err
 	}
 	return commentsMap[taskID], nil
 }
 
-func (s *Store) GetTaskComment(commentID int64) (TaskComment, error) {
+func (s *Store) GetTaskComment(ctx context.Context, commentID int64) (TaskComment, error) {
 	var c TaskComment
 	var author sql.NullInt64
 	var email sql.NullString
-	err := s.db.QueryRow(
+	err := s.db.QueryRowContext(ctx,
 		`SELECT c.id, c.task_id, c.body, c.author_id, c.created_at, u.email
 		FROM task_comments c
 		LEFT JOIN users u ON c.author_id = u.id
@@ -776,19 +759,22 @@ func (s *Store) GetTaskComment(commentID int64) (TaskComment, error) {
 	return c, nil
 }
 
-func (s *Store) DeleteTaskComment(commentID int64) error {
-	res, err := s.db.Exec(`DELETE FROM task_comments WHERE id = ?`, commentID)
+func (s *Store) DeleteTaskComment(ctx context.Context, commentID int64) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM task_comments WHERE id = ?`, commentID)
 	if err != nil {
 		return err
 	}
-	affected, _ := res.RowsAffected()
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rowsAffected: %w", err)
+	}
 	if affected == 0 {
 		return sql.ErrNoRows
 	}
 	return nil
 }
 
-func (s *Store) ListCommentsByTaskIDs(taskIDs []int64) (map[int64][]TaskComment, error) {
+func (s *Store) ListCommentsByTaskIDs(ctx context.Context, taskIDs []int64) (map[int64][]TaskComment, error) {
 	result := make(map[int64][]TaskComment, len(taskIDs))
 	if len(taskIDs) == 0 {
 		return result, nil
@@ -799,7 +785,7 @@ func (s *Store) ListCommentsByTaskIDs(taskIDs []int64) (map[int64][]TaskComment,
 		placeholders = append(placeholders, "?")
 		args = append(args, id)
 	}
-	rows, err := s.db.Query(
+	rows, err := s.db.QueryContext(ctx,
 		`SELECT c.id, c.task_id, c.body, c.author_id, c.created_at, u.email
 		FROM task_comments c
 		LEFT JOIN users u ON c.author_id = u.id
@@ -810,7 +796,7 @@ func (s *Store) ListCommentsByTaskIDs(taskIDs []int64) (map[int64][]TaskComment,
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck
 
 	for rows.Next() {
 		var c TaskComment
@@ -831,10 +817,11 @@ func (s *Store) ListCommentsByTaskIDs(taskIDs []int64) (map[int64][]TaskComment,
 	return result, nil
 }
 
-func (s *Store) ProjectNameMap() map[int64]string {
-	projects, err := s.ListProjects()
+func (s *Store) ProjectNameMap(ctx context.Context) map[int64]string {
+	projects, err := s.ListProjects(ctx)
 	result := make(map[int64]string, len(projects))
 	if err != nil {
+		log.Printf("warning: ProjectNameMap: %v", err)
 		return result
 	}
 	for _, p := range projects {
@@ -843,8 +830,8 @@ func (s *Store) ProjectNameMap() map[int64]string {
 	return result
 }
 
-func (s *Store) LookupProjectName(id int64) string {
-	names := s.ProjectNameMap()
+func (s *Store) LookupProjectName(ctx context.Context, id int64) string {
+	names := s.ProjectNameMap(ctx)
 	if name, ok := names[id]; ok {
 		return name
 	}
@@ -852,6 +839,33 @@ func (s *Store) LookupProjectName(id int64) string {
 		return DefaultProjectName
 	}
 	return fmt.Sprintf("Проект %d", id)
+}
+
+func (s *Store) GetUserInboxID(ctx context.Context, userID int64) int64 {
+	var id int64
+	_ = s.db.QueryRowContext(ctx, `SELECT id FROM projects WHERE is_inbox = 1 AND owner_id = ?`, userID).Scan(&id)
+	return id
+}
+
+func (s *Store) EnsureUserInbox(ctx context.Context, userID int64) (int64, error) {
+	var id int64
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM projects WHERE is_inbox = 1 AND owner_id = ?`, userID).Scan(&id)
+	if err == nil {
+		return id, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return 0, err
+	}
+	inboxName := fmt.Sprintf("%s#%d", DefaultInboxProjectName, userID)
+	res, err := s.db.ExecContext(ctx, `INSERT INTO projects (name, is_inbox, owner_id) VALUES (?, 1, ?)`, inboxName, userID)
+	if err != nil {
+		return 0, err
+	}
+	id, err = res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("lastInsertId: %w", err)
+	}
+	return id, nil
 }
 
 func setupSchema(db *sql.DB) error {
@@ -973,6 +987,21 @@ CREATE TABLE IF NOT EXISTS user_projects (
 	if _, err := db.Exec(`UPDATE tasks SET description = comment WHERE (description IS NULL OR description = '') AND comment IS NOT NULL AND comment != ''`); err != nil {
 		log.Printf("warning: unable to backfill description from comment: %v", err)
 	}
+	if _, err := db.Exec(`ALTER TABLE tasks ADD COLUMN author_label TEXT`); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+			log.Printf("warning: unable to add author_label column: %v", err)
+		}
+	}
+	if _, err := db.Exec(`ALTER TABLE projects ADD COLUMN is_inbox INTEGER NOT NULL DEFAULT 0`); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+			log.Printf("warning: unable to add is_inbox column: %v", err)
+		}
+	}
+	if _, err := db.Exec(`ALTER TABLE projects ADD COLUMN owner_id INTEGER`); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+			log.Printf("warning: unable to add owner_id column to projects: %v", err)
+		}
+	}
 
 	return nil
 }
@@ -1033,6 +1062,24 @@ func ensureAdminUser(db *sql.DB) error {
 	}
 	if _, err := db.Exec(`INSERT OR IGNORE INTO user_projects (user_id, project_id) VALUES ((SELECT id FROM users WHERE email = ?), ?)`, adminEmail, DefaultProjectID); err != nil {
 		log.Printf("warning: failed to assign default project to admin: %v", err)
+	}
+	var adminID int64
+	if err := db.QueryRow(`SELECT id FROM users WHERE email = ?`, adminEmail).Scan(&adminID); err == nil && adminID > 0 {
+		var inboxID int64
+		if err := db.QueryRow(`SELECT id FROM projects WHERE is_inbox = 1 AND owner_id = ?`, adminID).Scan(&inboxID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				inboxName := fmt.Sprintf("%s#%d", DefaultInboxProjectName, adminID)
+				res, err := db.Exec(`INSERT INTO projects (name, is_inbox, owner_id) VALUES (?, 1, ?)`, inboxName, adminID)
+				if err == nil {
+					inboxID, _ = res.LastInsertId()
+				}
+			}
+		}
+		if inboxID > 0 {
+			if _, err := db.Exec(`INSERT OR IGNORE INTO user_projects (user_id, project_id) VALUES (?, ?)`, adminID, inboxID); err != nil {
+				log.Printf("warning: failed to assign inbox to admin: %v", err)
+			}
+		}
 	}
 	return nil
 }

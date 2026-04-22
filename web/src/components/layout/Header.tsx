@@ -14,7 +14,12 @@ function Header({
   brandHref,
   onBrandClick,
 }: HeaderProps) {
-  const brand = <div className="brand">LiteTask</div>;
+  const brand = (
+    <div className="brand">
+      <span className="brand-lite">LITE</span>
+      <span className="brand-task">TASK</span>
+    </div>
+  );
   return (
     <Layout.Header className="header">
       {brandHref ? (

@@ -35,7 +35,7 @@ type authUser struct {
 }
 
 type Server struct {
-	store             *store.Store
+	store             store.Storer
 	authSecret        []byte
 	allowRegistration bool
 	staticDir         string
@@ -55,7 +55,51 @@ type taskResponse struct {
 	Comments    []store.TaskComment `json:"comments"`
 }
 
-func New(s *store.Store, secret []byte, allowRegistration bool, staticDir string) *Server {
+type userResponse struct {
+	ID         int64   `json:"id"`
+	Email      string  `json:"email"`
+	Username   string  `json:"username"`
+	Role       string  `json:"role"`
+	FirstName  string  `json:"firstName"`
+	LastName   string  `json:"lastName"`
+	ProjectIDs []int64 `json:"projectIds"`
+}
+
+type meResponse struct {
+	ID        int64  `json:"id"`
+	Email     string `json:"email"`
+	Username  string `json:"username"`
+	Role      string `json:"role"`
+	FirstName string `json:"firstName"`
+	LastName  string `json:"lastName"`
+	Telegram  string `json:"telegram"`
+}
+
+func userToResponse(u store.User, projectIDs []int64) userResponse {
+	return userResponse{
+		ID:         u.ID,
+		Email:      u.Email,
+		Username:   u.Username,
+		Role:       u.Role,
+		FirstName:  u.FirstName,
+		LastName:   u.LastName,
+		ProjectIDs: projectIDs,
+	}
+}
+
+func userToMe(u store.User) meResponse {
+	return meResponse{
+		ID:        u.ID,
+		Email:     u.Email,
+		Username:  u.Username,
+		Role:      u.Role,
+		FirstName: u.FirstName,
+		LastName:  u.LastName,
+		Telegram:  u.Telegram,
+	}
+}
+
+func New(s store.Storer, secret []byte, allowRegistration bool, staticDir string) *Server {
 	return &Server{
 		store:             s,
 		authSecret:        secret,
@@ -79,8 +123,12 @@ func (s *Server) Routes() http.Handler {
 }
 
 func (s *Server) cors(next http.Handler) http.Handler {
+	allowedOrigin := os.Getenv("CORS_ORIGIN")
+	if allowedOrigin == "" {
+		allowedOrigin = "*"
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
 		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Authorization")
 		if r.Method == http.MethodOptions {
@@ -95,24 +143,28 @@ func (s *Server) requireUser(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u, err := s.authenticate(r)
 		if err != nil {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			writeError(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		if u.Role == "blocked" {
-			http.Error(w, "account blocked", http.StatusForbidden)
+			writeError(w, "account blocked", http.StatusForbidden)
 			return
 		}
 		auth := authUser{user: u}
 		if u.Role != "admin" {
-			allowed, err := s.store.GetUserProjects(u.ID)
+			allowed, err := s.store.GetUserProjects(r.Context(), u.ID)
 			if err != nil {
-				http.Error(w, "server error", http.StatusInternalServerError)
+				writeError(w, "server error", http.StatusInternalServerError)
 				return
 			}
 			auth.isRestricted = true
-			auth.allowed = make(map[int64]struct{}, len(allowed))
+			auth.allowed = make(map[int64]struct{}, len(allowed)+1)
 			for _, pid := range allowed {
 				auth.allowed[pid] = struct{}{}
+			}
+			// Personal inbox is always accessible even if not in user_projects
+			if inboxID := s.store.GetUserInboxID(r.Context(), u.ID); inboxID > 0 {
+				auth.allowed[inboxID] = struct{}{}
 			}
 		}
 		ctx := context.WithValue(r.Context(), ctxUser, auth)
@@ -124,11 +176,11 @@ func (s *Server) requireAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u, err := s.authenticate(r)
 		if err != nil {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			writeError(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		if u.Role != "admin" {
-			http.Error(w, "forbidden", http.StatusForbidden)
+			writeError(w, "forbidden", http.StatusForbidden)
 			return
 		}
 		ctx := context.WithValue(r.Context(), ctxUser, authUser{user: u})
@@ -143,7 +195,7 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		s.createTask(w, r)
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeError(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
@@ -157,13 +209,13 @@ func (s *Server) handleTaskActions(w http.ResponseWriter, r *http.Request) {
 
 	id, err := strconv.ParseInt(parts[0], 10, 64)
 	if err != nil {
-		http.Error(w, "invalid task id", http.StatusBadRequest)
+		writeError(w, "invalid task id", http.StatusBadRequest)
 		return
 	}
 
 	if len(parts) == 2 && parts[1] == "status" {
 		if r.Method != http.MethodPatch {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			writeError(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 		s.updateStatus(w, r, id)
@@ -177,7 +229,7 @@ func (s *Server) handleTaskActions(w http.ResponseWriter, r *http.Request) {
 		case http.MethodPost:
 			s.addTaskComment(w, r, id)
 		default:
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			writeError(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 		return
 	}
@@ -185,7 +237,7 @@ func (s *Server) handleTaskActions(w http.ResponseWriter, r *http.Request) {
 	if len(parts) == 3 && parts[1] == "comments" && r.Method == http.MethodDelete {
 		commentID, err := strconv.ParseInt(parts[2], 10, 64)
 		if err != nil {
-			http.Error(w, "invalid comment id", http.StatusBadRequest)
+			writeError(w, "invalid comment id", http.StatusBadRequest)
 			return
 		}
 		s.deleteTaskComment(w, r, id, commentID)
@@ -212,7 +264,7 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		s.createProjectHandler(w, r)
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeError(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
@@ -228,40 +280,24 @@ func (s *Server) handleAuthRoutes(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(path, "/logout") && r.Method == http.MethodPost:
 		s.handleLogout(w, r)
 	default:
-		http.Error(w, "not found", http.StatusNotFound)
+		writeError(w, "not found", http.StatusNotFound)
 	}
 }
 
 func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		users, err := s.store.ListUsers()
+		users, err := s.store.ListUsers(r.Context())
 		if err != nil {
-			http.Error(w, "failed to load users", http.StatusInternalServerError)
+			writeError(w, "failed to load users", http.StatusInternalServerError)
 			return
 		}
-		trimmed := make([]struct {
-			ID         int64   `json:"id"`
-			Email      string  `json:"email"`
-			Username   string  `json:"username"`
-			Role       string  `json:"role"`
-			FirstName  string  `json:"firstName"`
-			LastName   string  `json:"lastName"`
-			ProjectIDs []int64 `json:"projectIds"`
-		}, len(users))
+		result := make([]userResponse, len(users))
 		for i, u := range users {
-			projects, _ := s.store.GetUserProjects(u.ID)
-			trimmed[i] = struct {
-				ID         int64   `json:"id"`
-				Email      string  `json:"email"`
-				Username   string  `json:"username"`
-				Role       string  `json:"role"`
-				FirstName  string  `json:"firstName"`
-				LastName   string  `json:"lastName"`
-				ProjectIDs []int64 `json:"projectIds"`
-			}{ID: u.ID, Email: u.Email, Username: u.Username, Role: u.Role, FirstName: u.FirstName, LastName: u.LastName, ProjectIDs: projects}
+			projects, _ := s.store.GetUserProjects(r.Context(), u.ID)
+			result[i] = userToResponse(u, projects)
 		}
-		writeJSON(w, trimmed)
+		writeJSON(w, result)
 	case http.MethodPost:
 		var payload struct {
 			Email     string `json:"email"`
@@ -272,7 +308,7 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 			LastName  string `json:"lastName"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			http.Error(w, "invalid request body", http.StatusBadRequest)
+			writeError(w, "invalid request body", http.StatusBadRequest)
 			return
 		}
 		payload.Email = strings.ToLower(strings.TrimSpace(payload.Email))
@@ -280,50 +316,42 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 		payload.Password = strings.TrimSpace(payload.Password)
 		payload.Role = strings.TrimSpace(strings.ToLower(payload.Role))
 		if payload.Email == "" || payload.Password == "" {
-			http.Error(w, "email and password required", http.StatusBadRequest)
+			writeError(w, "email and password required", http.StatusBadRequest)
 			return
 		}
 		if len(payload.Password) < 6 {
-			http.Error(w, "password too short", http.StatusBadRequest)
+			writeError(w, "password too short", http.StatusBadRequest)
 			return
 		}
 		if payload.Role == "" {
 			payload.Role = "user"
 		}
 		if payload.Role != "user" && payload.Role != "admin" && payload.Role != "blocked" {
-			http.Error(w, "invalid role", http.StatusBadRequest)
+			writeError(w, "invalid role", http.StatusBadRequest)
 			return
 		}
-		u, err := s.store.CreateUser(payload.Email, payload.Username, payload.Password, payload.Role, payload.FirstName, payload.LastName)
+		u, err := s.store.CreateUser(r.Context(), payload.Email, payload.Username, payload.Password, payload.Role, payload.FirstName, payload.LastName)
 		if err != nil {
 			if strings.Contains(strings.ToLower(err.Error()), "unique") {
 				lower := strings.ToLower(err.Error())
 				if strings.Contains(lower, "users.username") || strings.Contains(lower, "idx_users_username") {
-					http.Error(w, "юзернейм уже занят", http.StatusBadRequest)
+					writeError(w, "юзернейм уже занят", http.StatusBadRequest)
 					return
 				}
-				http.Error(w, "email already registered", http.StatusBadRequest)
+				writeError(w, "email already registered", http.StatusBadRequest)
 				return
 			}
 			if strings.Contains(strings.ToLower(err.Error()), "username") {
-				http.Error(w, err.Error(), http.StatusBadRequest)
+				writeError(w, err.Error(), http.StatusBadRequest)
 				return
 			}
-			http.Error(w, "failed to create user", http.StatusInternalServerError)
+			writeError(w, "failed to create user", http.StatusInternalServerError)
 			return
 		}
-		projects, _ := s.store.GetUserProjects(u.ID)
-		writeJSON(w, struct {
-			ID         int64   `json:"id"`
-			Email      string  `json:"email"`
-			Username   string  `json:"username"`
-			Role       string  `json:"role"`
-			FirstName  string  `json:"firstName"`
-			LastName   string  `json:"lastName"`
-			ProjectIDs []int64 `json:"projectIds"`
-		}{ID: u.ID, Email: u.Email, Username: u.Username, Role: u.Role, FirstName: u.FirstName, LastName: u.LastName, ProjectIDs: projects})
+		projects, _ := s.store.GetUserProjects(r.Context(), u.ID)
+		writeJSON(w, userToResponse(u, projects))
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeError(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
@@ -335,11 +363,11 @@ func (s *Server) handleUserActions(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		http.Error(w, "invalid user id", http.StatusBadRequest)
+		writeError(w, "invalid user id", http.StatusBadRequest)
 		return
 	}
 	if r.Method != http.MethodPatch {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeError(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	var payload struct {
@@ -350,89 +378,81 @@ func (s *Server) handleUserActions(w http.ResponseWriter, r *http.Request) {
 		LastName   *string `json:"lastName"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		writeError(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 	payload.Role = strings.TrimSpace(strings.ToLower(payload.Role))
 	password := strings.TrimSpace(payload.Password)
 	if payload.Role == "" && password == "" && payload.ProjectIDs == nil && payload.FirstName == nil && payload.LastName == nil {
-		http.Error(w, "nothing to update", http.StatusBadRequest)
+		writeError(w, "nothing to update", http.StatusBadRequest)
 		return
 	}
 
 	var updated store.User
 	if payload.Role != "" {
-		updated, err = s.store.UpdateUserRole(id, payload.Role)
+		updated, err = s.store.UpdateUserRole(r.Context(), id, payload.Role)
 		if errors.Is(err, store.ErrInvalidRole) {
-			http.Error(w, "invalid role", http.StatusBadRequest)
+			writeError(w, "invalid role", http.StatusBadRequest)
 			return
 		}
 		if errors.Is(err, store.ErrLastAdmin) {
-			http.Error(w, "cannot remove last admin", http.StatusBadRequest)
+			writeError(w, "cannot remove last admin", http.StatusBadRequest)
 			return
 		}
 		if errors.Is(err, sql.ErrNoRows) {
-			http.Error(w, "user not found", http.StatusNotFound)
+			writeError(w, "user not found", http.StatusNotFound)
 			return
 		}
 		if err != nil {
-			http.Error(w, "failed to update user", http.StatusInternalServerError)
+			writeError(w, "failed to update user", http.StatusInternalServerError)
 			return
 		}
 	}
 	if password != "" {
-		updated, err = s.store.UpdateUserPassword(id, password)
+		updated, err = s.store.UpdateUserPassword(r.Context(), id, password)
 		if errors.Is(err, sql.ErrNoRows) {
-			http.Error(w, "user not found", http.StatusNotFound)
+			writeError(w, "user not found", http.StatusNotFound)
 			return
 		}
 		if err != nil {
-			http.Error(w, "failed to update password", http.StatusBadRequest)
+			writeError(w, "failed to update password", http.StatusBadRequest)
 			return
 		}
 	}
 	if payload.ProjectIDs != nil {
-		if err := s.store.SetUserProjects(id, payload.ProjectIDs); err != nil {
+		if err := s.store.SetUserProjects(r.Context(), id, payload.ProjectIDs); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				http.Error(w, "user not found", http.StatusNotFound)
+				writeError(w, "user not found", http.StatusNotFound)
 				return
 			}
-			http.Error(w, "failed to update projects", http.StatusBadRequest)
+			writeError(w, "failed to update projects", http.StatusBadRequest)
 			return
 		}
 	}
 	if payload.FirstName != nil || payload.LastName != nil {
-		updated, err = s.store.UpdateUserProfile(id, nil, nil, payload.FirstName, payload.LastName)
+		updated, err = s.store.UpdateUserProfile(r.Context(), id, nil, nil, payload.FirstName, payload.LastName)
 		if errors.Is(err, sql.ErrNoRows) {
-			http.Error(w, "user not found", http.StatusNotFound)
+			writeError(w, "user not found", http.StatusNotFound)
 			return
 		}
 		if err != nil {
-			http.Error(w, "failed to update user", http.StatusInternalServerError)
+			writeError(w, "failed to update user", http.StatusInternalServerError)
 			return
 		}
 	}
 	if updated.ID == 0 {
-		updated, err = s.store.GetUserByID(id)
+		updated, err = s.store.GetUserByID(r.Context(), id)
 		if errors.Is(err, sql.ErrNoRows) {
-			http.Error(w, "user not found", http.StatusNotFound)
+			writeError(w, "user not found", http.StatusNotFound)
 			return
 		}
 		if err != nil {
-			http.Error(w, "server error", http.StatusInternalServerError)
+			writeError(w, "server error", http.StatusInternalServerError)
 			return
 		}
 	}
-	projects, _ := s.store.GetUserProjects(id)
-	writeJSON(w, struct {
-		ID         int64   `json:"id"`
-		Email      string  `json:"email"`
-		Username   string  `json:"username"`
-		Role       string  `json:"role"`
-		FirstName  string  `json:"firstName"`
-		LastName   string  `json:"lastName"`
-		ProjectIDs []int64 `json:"projectIds"`
-	}{ID: updated.ID, Email: updated.Email, Username: updated.Username, Role: updated.Role, FirstName: updated.FirstName, LastName: updated.LastName, ProjectIDs: projects})
+	projects, _ := s.store.GetUserProjects(r.Context(), id)
+	writeJSON(w, userToResponse(updated, projects))
 }
 
 func (s *Server) handleProjectActions(w http.ResponseWriter, r *http.Request) {
@@ -444,7 +464,7 @@ func (s *Server) handleProjectActions(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		http.Error(w, "invalid project id", http.StatusBadRequest)
+		writeError(w, "invalid project id", http.StatusBadRequest)
 		return
 	}
 
@@ -452,29 +472,31 @@ func (s *Server) handleProjectActions(w http.ResponseWriter, r *http.Request) {
 	case http.MethodDelete:
 		s.deleteProjectHandler(w, r, id)
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeError(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
 func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
-	projects, err := s.store.ListProjects()
+	projects, err := s.store.ListProjects(r.Context())
 	if err != nil {
-		http.Error(w, "failed to load projects", http.StatusInternalServerError)
+		writeError(w, "failed to load projects", http.StatusInternalServerError)
 		return
 	}
-	authVal := r.Context().Value(ctxUser)
-	if authVal != nil {
-		if auth, ok := authVal.(authUser); ok && auth.isRestricted {
-			filtered := make([]store.Project, 0, len(auth.allowed))
-			for _, p := range projects {
-				if _, ok := auth.allowed[p.ID]; ok {
-					filtered = append(filtered, p)
-				}
-			}
-			projects = filtered
+	auth := getAuth(r)
+	filtered := make([]store.Project, 0, len(projects))
+	for _, p := range projects {
+		// Never show another user's personal project
+		if p.OwnerID != 0 && p.OwnerID != auth.user.ID {
+			continue
 		}
+		if auth.isRestricted {
+			if _, ok := auth.allowed[p.ID]; !ok {
+				continue
+			}
+		}
+		filtered = append(filtered, p)
 	}
-	writeJSON(w, projects)
+	writeJSON(w, filtered)
 }
 
 func (s *Server) createProjectHandler(w http.ResponseWriter, r *http.Request) {
@@ -483,30 +505,34 @@ func (s *Server) createProjectHandler(w http.ResponseWriter, r *http.Request) {
 		Name string `json:"name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		writeError(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 	payload.Name = strings.TrimSpace(payload.Name)
 	if payload.Name == "" {
-		http.Error(w, "name is required", http.StatusBadRequest)
+		writeError(w, "name is required", http.StatusBadRequest)
 		return
 	}
-	p, err := s.store.CreateProject(payload.Name)
+	if len(payload.Name) > 255 {
+		writeError(w, "project name too long", http.StatusBadRequest)
+		return
+	}
+	p, err := s.store.CreateProject(r.Context(), payload.Name)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
-			http.Error(w, "project name already exists", http.StatusBadRequest)
+			writeError(w, "project name already exists", http.StatusBadRequest)
 			return
 		}
-		http.Error(w, "failed to create project", http.StatusInternalServerError)
+		writeError(w, "failed to create project", http.StatusInternalServerError)
 		return
 	}
 	if auth.isRestricted {
-		current, err := s.store.GetUserProjects(auth.user.ID)
+		current, err := s.store.GetUserProjects(r.Context(), auth.user.ID)
 		if err != nil {
 			log.Printf("failed to load user projects after create: %v", err)
 		} else {
 			next := append(current, p.ID)
-			if err := s.store.SetUserProjects(auth.user.ID, next); err != nil {
+			if err := s.store.SetUserProjects(r.Context(), auth.user.ID, next); err != nil {
 				log.Printf("failed to assign project to user: %v", err)
 			}
 		}
@@ -515,21 +541,21 @@ func (s *Server) createProjectHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteProjectHandler(w http.ResponseWriter, r *http.Request, id int64) {
-	if id == store.DefaultProjectID {
-		http.Error(w, "cannot delete default project", http.StatusBadRequest)
-		return
-	}
 	auth := getAuth(r)
 	if auth.user.Role != "admin" {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		writeError(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	if err := s.store.DeleteProject(id); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			http.Error(w, "project not found", http.StatusNotFound)
+	if err := s.store.DeleteProject(r.Context(), id); err != nil {
+		if errors.Is(err, store.ErrProtectedProject) {
+			writeError(w, "cannot delete default project", http.StatusBadRequest)
 			return
 		}
-		http.Error(w, "failed to delete project", http.StatusInternalServerError)
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, "project not found", http.StatusNotFound)
+			return
+		}
+		writeError(w, "failed to delete project", http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -554,12 +580,12 @@ func toTaskResponse(t store.Task, comments []store.TaskComment) taskResponse {
 	}
 }
 
-func (s *Server) attachComments(tasks []store.Task) ([]taskResponse, error) {
+func (s *Server) attachComments(ctx context.Context, tasks []store.Task) ([]taskResponse, error) {
 	ids := make([]int64, 0, len(tasks))
 	for _, t := range tasks {
 		ids = append(ids, t.ID)
 	}
-	comments, err := s.store.ListCommentsByTaskIDs(ids)
+	comments, err := s.store.ListCommentsByTaskIDs(ctx, ids)
 	if err != nil {
 		return nil, err
 	}
@@ -576,7 +602,7 @@ func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
 	if pid := r.URL.Query().Get("projectId"); pid != "" {
 		val, err := strconv.ParseInt(pid, 10, 64)
 		if err != nil {
-			http.Error(w, "invalid projectId", http.StatusBadRequest)
+			writeError(w, "invalid projectId", http.StatusBadRequest)
 			return
 		}
 		projectID = val
@@ -584,20 +610,20 @@ func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
 
 	if auth.isRestricted {
 		if projectID == 0 || !auth.canAccess(projectID) {
-			http.Error(w, "forbidden", http.StatusForbidden)
+			writeError(w, "forbidden", http.StatusForbidden)
 			return
 		}
 	}
 
-	tasks, err := s.store.FetchTasks(projectID, "", auth.allowed)
+	tasks, err := s.store.FetchTasks(r.Context(), projectID, "", auth.allowed)
 	if err != nil {
-		http.Error(w, "failed to load tasks", http.StatusInternalServerError)
+		writeError(w, "failed to load tasks", http.StatusInternalServerError)
 		return
 	}
 
-	withComments, err := s.attachComments(tasks)
+	withComments, err := s.attachComments(r.Context(), tasks)
 	if err != nil {
-		http.Error(w, "failed to load comments", http.StatusInternalServerError)
+		writeError(w, "failed to load comments", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, withComments)
@@ -611,7 +637,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		ProjectID   int64  `json:"projectId"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		writeError(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 	payload.Title = strings.TrimSpace(payload.Title)
@@ -620,21 +646,25 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		payload.ProjectID = store.DefaultProjectID
 	}
 	if auth.isRestricted && !auth.canAccess(payload.ProjectID) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		writeError(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	if payload.Title == "" {
-		http.Error(w, "title is required", http.StatusBadRequest)
+		writeError(w, "title is required", http.StatusBadRequest)
+		return
+	}
+	if len(payload.Title) > 500 {
+		writeError(w, "title too long", http.StatusBadRequest)
 		return
 	}
 
-	created, err := s.store.InsertTask(payload.Title, payload.Description, payload.ProjectID, auth.user.ID)
+	created, err := s.store.InsertTask(r.Context(), payload.Title, payload.Description, "", payload.ProjectID, auth.user.ID)
 	if err != nil {
 		if strings.Contains(err.Error(), "project not found") {
-			http.Error(w, "project not found", http.StatusBadRequest)
+			writeError(w, "project not found", http.StatusBadRequest)
 			return
 		}
-		http.Error(w, "failed to create task", http.StatusInternalServerError)
+		writeError(w, "failed to create task", http.StatusInternalServerError)
 		return
 	}
 
@@ -643,45 +673,45 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) updateStatus(w http.ResponseWriter, r *http.Request, id int64) {
 	auth := getAuth(r)
-	existing, err := s.store.GetTask(id)
+	existing, err := s.store.GetTask(r.Context(), id)
 	if errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, "task not found", http.StatusNotFound)
+		writeError(w, "task not found", http.StatusNotFound)
 		return
 	}
 	if err != nil {
-		http.Error(w, "failed to load task", http.StatusInternalServerError)
+		writeError(w, "failed to load task", http.StatusInternalServerError)
 		return
 	}
 	if auth.isRestricted && !auth.canAccess(existing.ProjectID) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		writeError(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	var payload struct {
 		Status string `json:"status"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		writeError(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 	payload.Status = strings.TrimSpace(payload.Status)
 
-	updated, err := s.store.SetTaskStatus(id, payload.Status)
+	updated, err := s.store.SetTaskStatus(r.Context(), id, payload.Status)
 	if errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, "task not found", http.StatusNotFound)
+		writeError(w, "task not found", http.StatusNotFound)
 		return
 	}
 	if errors.Is(err, store.ErrInvalidStatus) {
-		http.Error(w, "invalid status", http.StatusBadRequest)
+		writeError(w, "invalid status", http.StatusBadRequest)
 		return
 	}
 	if err != nil {
-		http.Error(w, "failed to update task", http.StatusInternalServerError)
+		writeError(w, "failed to update task", http.StatusInternalServerError)
 		return
 	}
 
-	comments, err := s.store.ListTaskComments(id)
+	comments, err := s.store.ListTaskComments(r.Context(), id)
 	if err != nil {
-		http.Error(w, "failed to load comments", http.StatusInternalServerError)
+		writeError(w, "failed to load comments", http.StatusInternalServerError)
 		return
 	}
 
@@ -690,41 +720,41 @@ func (s *Server) updateStatus(w http.ResponseWriter, r *http.Request, id int64) 
 
 func (s *Server) updateDescription(w http.ResponseWriter, r *http.Request, id int64) {
 	auth := getAuth(r)
-	existing, err := s.store.GetTask(id)
+	existing, err := s.store.GetTask(r.Context(), id)
 	if errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, "task not found", http.StatusNotFound)
+		writeError(w, "task not found", http.StatusNotFound)
 		return
 	}
 	if err != nil {
-		http.Error(w, "failed to load task", http.StatusInternalServerError)
+		writeError(w, "failed to load task", http.StatusInternalServerError)
 		return
 	}
 	if auth.isRestricted && !auth.canAccess(existing.ProjectID) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		writeError(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	var payload struct {
 		Description string `json:"description"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		writeError(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 	payload.Description = strings.TrimSpace(payload.Description)
 
-	updated, err := s.store.SetTaskDescription(id, payload.Description)
+	updated, err := s.store.SetTaskDescription(r.Context(), id, payload.Description)
 	if errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, "task not found", http.StatusNotFound)
+		writeError(w, "task not found", http.StatusNotFound)
 		return
 	}
 	if err != nil {
-		http.Error(w, "failed to update description", http.StatusInternalServerError)
+		writeError(w, "failed to update description", http.StatusInternalServerError)
 		return
 	}
 
-	comments, err := s.store.ListTaskComments(id)
+	comments, err := s.store.ListTaskComments(r.Context(), id)
 	if err != nil {
-		http.Error(w, "failed to load comments", http.StatusInternalServerError)
+		writeError(w, "failed to load comments", http.StatusInternalServerError)
 		return
 	}
 
@@ -733,22 +763,22 @@ func (s *Server) updateDescription(w http.ResponseWriter, r *http.Request, id in
 
 func (s *Server) listTaskComments(w http.ResponseWriter, r *http.Request, taskID int64) {
 	auth := getAuth(r)
-	existing, err := s.store.GetTask(taskID)
+	existing, err := s.store.GetTask(r.Context(), taskID)
 	if errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, "task not found", http.StatusNotFound)
+		writeError(w, "task not found", http.StatusNotFound)
 		return
 	}
 	if err != nil {
-		http.Error(w, "failed to load task", http.StatusInternalServerError)
+		writeError(w, "failed to load task", http.StatusInternalServerError)
 		return
 	}
 	if auth.isRestricted && !auth.canAccess(existing.ProjectID) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		writeError(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	comments, err := s.store.ListTaskComments(taskID)
+	comments, err := s.store.ListTaskComments(r.Context(), taskID)
 	if err != nil {
-		http.Error(w, "failed to load comments", http.StatusInternalServerError)
+		writeError(w, "failed to load comments", http.StatusInternalServerError)
 		return
 	}
 	if comments == nil {
@@ -759,34 +789,38 @@ func (s *Server) listTaskComments(w http.ResponseWriter, r *http.Request, taskID
 
 func (s *Server) addTaskComment(w http.ResponseWriter, r *http.Request, taskID int64) {
 	auth := getAuth(r)
-	existing, err := s.store.GetTask(taskID)
+	existing, err := s.store.GetTask(r.Context(), taskID)
 	if errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, "task not found", http.StatusNotFound)
+		writeError(w, "task not found", http.StatusNotFound)
 		return
 	}
 	if err != nil {
-		http.Error(w, "failed to load task", http.StatusInternalServerError)
+		writeError(w, "failed to load task", http.StatusInternalServerError)
 		return
 	}
 	if auth.isRestricted && !auth.canAccess(existing.ProjectID) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		writeError(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	var payload struct {
 		Body string `json:"body"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		writeError(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 	payload.Body = strings.TrimSpace(payload.Body)
 	if payload.Body == "" {
-		http.Error(w, "comment cannot be empty", http.StatusBadRequest)
+		writeError(w, "comment cannot be empty", http.StatusBadRequest)
 		return
 	}
-	comment, err := s.store.AddTaskComment(taskID, payload.Body, auth.user.ID)
+	if len(payload.Body) > 5000 {
+		writeError(w, "comment too long", http.StatusBadRequest)
+		return
+	}
+	comment, err := s.store.AddTaskComment(r.Context(), taskID, payload.Body, auth.user.ID)
 	if err != nil {
-		http.Error(w, "failed to add comment", http.StatusInternalServerError)
+		writeError(w, "failed to add comment", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, comment)
@@ -794,42 +828,42 @@ func (s *Server) addTaskComment(w http.ResponseWriter, r *http.Request, taskID i
 
 func (s *Server) deleteTaskComment(w http.ResponseWriter, r *http.Request, taskID, commentID int64) {
 	auth := getAuth(r)
-	task, err := s.store.GetTask(taskID)
+	task, err := s.store.GetTask(r.Context(), taskID)
 	if errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, "task not found", http.StatusNotFound)
+		writeError(w, "task not found", http.StatusNotFound)
 		return
 	}
 	if err != nil {
-		http.Error(w, "failed to load task", http.StatusInternalServerError)
+		writeError(w, "failed to load task", http.StatusInternalServerError)
 		return
 	}
 	if auth.isRestricted && !auth.canAccess(task.ProjectID) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		writeError(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	comment, err := s.store.GetTaskComment(commentID)
+	comment, err := s.store.GetTaskComment(r.Context(), commentID)
 	if errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, "comment not found", http.StatusNotFound)
+		writeError(w, "comment not found", http.StatusNotFound)
 		return
 	}
 	if err != nil {
-		http.Error(w, "failed to load comment", http.StatusInternalServerError)
+		writeError(w, "failed to load comment", http.StatusInternalServerError)
 		return
 	}
 	if comment.TaskID != taskID {
-		http.Error(w, "comment does not belong to task", http.StatusBadRequest)
+		writeError(w, "comment does not belong to task", http.StatusBadRequest)
 		return
 	}
 	if comment.AuthorID != auth.user.ID {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		writeError(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	if err := s.store.DeleteTaskComment(commentID); err != nil {
+	if err := s.store.DeleteTaskComment(r.Context(), commentID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			http.Error(w, "comment not found", http.StatusNotFound)
+			writeError(w, "comment not found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, "failed to delete comment", http.StatusInternalServerError)
+		writeError(w, "failed to delete comment", http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -837,25 +871,25 @@ func (s *Server) deleteTaskComment(w http.ResponseWriter, r *http.Request, taskI
 
 func (s *Server) deleteTaskHandler(w http.ResponseWriter, r *http.Request, id int64) {
 	auth := getAuth(r)
-	existing, err := s.store.GetTask(id)
+	existing, err := s.store.GetTask(r.Context(), id)
 	if errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, "task not found", http.StatusNotFound)
+		writeError(w, "task not found", http.StatusNotFound)
 		return
 	}
 	if err != nil {
-		http.Error(w, "failed to load task", http.StatusInternalServerError)
+		writeError(w, "failed to load task", http.StatusInternalServerError)
 		return
 	}
 	if auth.isRestricted && !auth.canAccess(existing.ProjectID) {
-		http.Error(w, "forbidden", http.StatusForbidden)
+		writeError(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	if err := s.store.DeleteTask(id); err != nil {
+	if err := s.store.DeleteTask(r.Context(), id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			http.Error(w, "task not found", http.StatusNotFound)
+			writeError(w, "task not found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, "failed to delete task", http.StatusInternalServerError)
+		writeError(w, "failed to delete task", http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -868,7 +902,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		writeError(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 	login := strings.TrimSpace(strings.ToLower(payload.Login))
@@ -876,50 +910,34 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		login = strings.TrimSpace(strings.ToLower(payload.Email))
 	}
 	if login == "" || payload.Password == "" {
-		http.Error(w, "email/юзернейм и пароль обязательны", http.StatusBadRequest)
+		writeError(w, "email/юзернейм и пароль обязательны", http.StatusBadRequest)
 		return
 	}
-	u, err := s.store.GetUserByEmailOrUsername(login)
+	u, err := s.store.GetUserByEmailOrUsername(r.Context(), login)
 	if errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, "invalid credentials", http.StatusUnauthorized)
+		writeError(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
 	if err != nil {
-		http.Error(w, "server error", http.StatusInternalServerError)
+		writeError(w, "server error", http.StatusInternalServerError)
 		return
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(u.Password), []byte(payload.Password)); err != nil {
-		http.Error(w, "invalid credentials", http.StatusUnauthorized)
+		writeError(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
 	if u.Role == "blocked" {
-		http.Error(w, "account blocked", http.StatusForbidden)
+		writeError(w, "account blocked", http.StatusForbidden)
 		return
 	}
 	token := createToken(u, s.authSecret)
 	setAuthCookie(w, token)
-	writeJSON(w, struct {
-		ID        int64  `json:"id"`
-		Email     string `json:"email"`
-		Username  string `json:"username"`
-		Role      string `json:"role"`
-		FirstName string `json:"firstName"`
-		LastName  string `json:"lastName"`
-		Telegram  string `json:"telegram"`
-	}{
-		ID:        u.ID,
-		Email:     u.Email,
-		Username:  u.Username,
-		Role:      u.Role,
-		FirstName: u.FirstName,
-		LastName:  u.LastName,
-		Telegram:  u.Telegram,
-	})
+	writeJSON(w, userToMe(u))
 }
 
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if !s.allowRegistration {
-		http.Error(w, "registration disabled", http.StatusForbidden)
+		writeError(w, "registration disabled", http.StatusForbidden)
 		return
 	}
 	var payload struct {
@@ -930,81 +948,53 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		LastName  string `json:"lastName"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		writeError(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 	payload.Email = strings.TrimSpace(strings.ToLower(payload.Email))
 	payload.Username = strings.TrimSpace(strings.ToLower(payload.Username))
 	if payload.Email == "" || payload.Password == "" {
-		http.Error(w, "email and password required", http.StatusBadRequest)
+		writeError(w, "email and password required", http.StatusBadRequest)
 		return
 	}
 	if len(payload.Password) < 6 {
-		http.Error(w, "password too short", http.StatusBadRequest)
+		writeError(w, "password too short", http.StatusBadRequest)
 		return
 	}
-	u, err := s.store.CreateUser(payload.Email, payload.Username, payload.Password, "user", payload.FirstName, payload.LastName)
+	u, err := s.store.CreateUser(r.Context(), payload.Email, payload.Username, payload.Password, "user", payload.FirstName, payload.LastName)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
 			lower := strings.ToLower(err.Error())
 			if strings.Contains(lower, "users.username") || strings.Contains(lower, "idx_users_username") {
-				http.Error(w, "юзернейм уже занят", http.StatusBadRequest)
+				writeError(w, "юзернейм уже занят", http.StatusBadRequest)
 				return
 			}
-			http.Error(w, "email already registered", http.StatusBadRequest)
+			writeError(w, "email already registered", http.StatusBadRequest)
 			return
 		}
 		if strings.Contains(err.Error(), "username") {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeError(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		http.Error(w, "server error", http.StatusInternalServerError)
+		writeError(w, "server error", http.StatusInternalServerError)
 		return
 	}
 	token := createToken(u, s.authSecret)
 	setAuthCookie(w, token)
-	writeJSON(w, struct {
-		ID        int64  `json:"id"`
-		Email     string `json:"email"`
-		Username  string `json:"username"`
-		Role      string `json:"role"`
-		FirstName string `json:"firstName"`
-		LastName  string `json:"lastName"`
-		Telegram  string `json:"telegram"`
-	}{
-		ID:        u.ID,
-		Email:     u.Email,
-		Username:  u.Username,
-		Role:      u.Role,
-		FirstName: u.FirstName,
-		LastName:  u.LastName,
-		Telegram:  u.Telegram,
-	})
+	writeJSON(w, userToMe(u))
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	u, err := s.authenticate(r)
 	if err != nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeError(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	writeJSON(w, struct {
-		ID        int64  `json:"id"`
-		Email     string `json:"email"`
-		Username  string `json:"username"`
-		Role      string `json:"role"`
-		FirstName string `json:"firstName"`
-		LastName  string `json:"lastName"`
-		Telegram  string `json:"telegram"`
-	}{
-		ID:        u.ID,
-		Email:     u.Email,
-		Username:  u.Username,
-		Role:      u.Role,
-		FirstName: u.FirstName,
-		LastName:  u.LastName,
-		Telegram:  u.Telegram,
-	})
+	if u.Role == "blocked" {
+		writeError(w, "account blocked", http.StatusForbidden)
+		return
+	}
+	writeJSON(w, userToMe(u))
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, _ *http.Request) {
@@ -1015,29 +1005,17 @@ func (s *Server) handleLogout(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 	u, err := s.authenticate(r)
 	if err != nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if u.Role == "blocked" {
+		writeError(w, "account blocked", http.StatusForbidden)
 		return
 	}
 
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, struct {
-			ID        int64  `json:"id"`
-			Email     string `json:"email"`
-			Username  string `json:"username"`
-			Role      string `json:"role"`
-			FirstName string `json:"firstName"`
-			LastName  string `json:"lastName"`
-			Telegram  string `json:"telegram"`
-		}{
-			ID:        u.ID,
-			Email:     u.Email,
-			Username:  u.Username,
-			Role:      u.Role,
-			FirstName: u.FirstName,
-			LastName:  u.LastName,
-			Telegram:  u.Telegram,
-		})
+		writeJSON(w, userToMe(u))
 	case http.MethodPatch:
 		var payload struct {
 			Password  *string `json:"password"`
@@ -1047,11 +1025,11 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 			Username  *string `json:"username"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			http.Error(w, "invalid request body", http.StatusBadRequest)
+			writeError(w, "invalid request body", http.StatusBadRequest)
 			return
 		}
 		if payload.Password == nil && payload.Telegram == nil && payload.FirstName == nil && payload.LastName == nil && payload.Username == nil {
-			http.Error(w, "nothing to update", http.StatusBadRequest)
+			writeError(w, "nothing to update", http.StatusBadRequest)
 			return
 		}
 		if payload.Telegram != nil {
@@ -1073,59 +1051,43 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 
 		if payload.Username != nil && *payload.Username != "" {
 			if u.Username != "" && u.Username != *payload.Username {
-				http.Error(w, "юзернейм уже установлен", http.StatusBadRequest)
+				writeError(w, "юзернейм уже установлен", http.StatusBadRequest)
 				return
 			}
 			if u.Username == "" {
-				updated, err := s.store.SetUsernameOnce(u.ID, *payload.Username)
+				updated, err := s.store.SetUsernameOnce(r.Context(), u.ID, *payload.Username)
 				if err != nil {
 					if errors.Is(err, store.ErrUsernameSet) {
-						http.Error(w, "юзернейм уже установлен", http.StatusBadRequest)
+						writeError(w, "юзернейм уже установлен", http.StatusBadRequest)
 						return
 					}
 					if strings.Contains(strings.ToLower(err.Error()), "unique") {
-						http.Error(w, "юзернейм уже занят", http.StatusBadRequest)
+						writeError(w, "юзернейм уже занят", http.StatusBadRequest)
 						return
 					}
-					http.Error(w, err.Error(), http.StatusBadRequest)
+					writeError(w, err.Error(), http.StatusBadRequest)
 					return
 				}
 				u = updated
 			}
 		}
 
-		updated, err := s.store.UpdateUserProfile(u.ID, payload.Password, payload.Telegram, payload.FirstName, payload.LastName)
+		updated, err := s.store.UpdateUserProfile(r.Context(), u.ID, payload.Password, payload.Telegram, payload.FirstName, payload.LastName)
 		if errors.Is(err, sql.ErrNoRows) {
-			http.Error(w, "user not found", http.StatusNotFound)
+			writeError(w, "user not found", http.StatusNotFound)
 			return
 		}
 		if err != nil {
 			if err.Error() == "password too short" {
-				http.Error(w, "password too short", http.StatusBadRequest)
+				writeError(w, "password too short", http.StatusBadRequest)
 				return
 			}
-			http.Error(w, "failed to update profile", http.StatusInternalServerError)
+			writeError(w, "failed to update profile", http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, struct {
-			ID        int64  `json:"id"`
-			Email     string `json:"email"`
-			Username  string `json:"username"`
-			Role      string `json:"role"`
-			FirstName string `json:"firstName"`
-			LastName  string `json:"lastName"`
-			Telegram  string `json:"telegram"`
-		}{
-			ID:        updated.ID,
-			Email:     updated.Email,
-			Username:  updated.Username,
-			Role:      updated.Role,
-			FirstName: updated.FirstName,
-			LastName:  updated.LastName,
-			Telegram:  updated.Telegram,
-		})
+		writeJSON(w, userToMe(updated))
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeError(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
@@ -1138,14 +1100,7 @@ func (s *Server) authenticate(r *http.Request) (store.User, error) {
 	if err != nil {
 		return store.User{}, err
 	}
-	u, err := s.store.GetUserByID(claims.UserID)
-	if err != nil {
-		return store.User{}, err
-	}
-	if u.Role == "blocked" {
-		return store.User{}, errors.New("blocked")
-	}
-	return u, nil
+	return s.store.GetUserByID(r.Context(), claims.UserID)
 }
 
 type tokenClaims struct {
@@ -1254,12 +1209,20 @@ func writeJSON(w http.ResponseWriter, v any) {
 	}
 }
 
+func writeError(w http.ResponseWriter, msg string, code int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(struct {
+		Error string `json:"error"`
+	}{Error: msg})
+}
+
 func (s *Server) staticHandler() http.Handler {
 	abs, err := filepath.Abs(s.staticDir)
 	if err != nil {
 		log.Printf("static path error: %v", err)
 		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			http.Error(w, "static assets not available", http.StatusInternalServerError)
+			writeError(w, "static assets not available", http.StatusInternalServerError)
 		})
 	}
 
@@ -1275,7 +1238,7 @@ func (s *Server) staticHandler() http.Handler {
 		}
 		full := filepath.Join(abs, filepath.Clean(requestPath))
 		if !strings.HasPrefix(full, abs) {
-			http.Error(w, "invalid path", http.StatusBadRequest)
+			writeError(w, "invalid path", http.StatusBadRequest)
 			return
 		}
 

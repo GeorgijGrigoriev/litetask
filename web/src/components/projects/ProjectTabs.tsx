@@ -10,6 +10,7 @@ type ProjectTabsProps = {
   projectTaskCounts: Record<number, number>;
   onSelectProject: (projectId: number) => void;
   onOpenCreateTask: () => void;
+  onGoToQuick: () => void;
 };
 
 function ProjectTabs({
@@ -19,19 +20,23 @@ function ProjectTabs({
   projectTaskCounts,
   onSelectProject,
   onOpenCreateTask,
+  onGoToQuick,
 }: ProjectTabsProps) {
   return (
     <Card className="project-card project-card--compact">
       <div className="project-card-header">
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          onClick={onOpenCreateTask}
-          disabled={!selectedProject}
-          title="Option+N"
-        >
-          Добавить задачу
-        </Button>
+        <Space size="small">
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={onOpenCreateTask}
+            disabled={!selectedProject}
+            title="Option+N"
+          >
+            Добавить задачу
+          </Button>
+          <Button onClick={onGoToQuick}>Быстрый ввод</Button>
+        </Space>
         <div className="project-card-title">Проекты</div>
       </div>
       {projects.length === 0 && !loadingProjects ? (
@@ -44,7 +49,7 @@ function ProjectTabs({
             key: String(p.id),
             label: (
               <Space size={6}>
-                <span>{p.name}</span>
+                <span>{p.isInbox ? "Входящие" : p.name}</span>
                 <Badge
                   count={
                     projectTaskCounts[p.id] !== undefined

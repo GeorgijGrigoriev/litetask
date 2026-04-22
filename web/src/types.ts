@@ -26,6 +26,7 @@ export type Task = {
 export type Project = {
   id: number;
   name: string;
+  isInbox: boolean;
   createdAt: string;
 };
 

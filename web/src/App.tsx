@@ -257,6 +257,16 @@ function App() {
       } else {
         setSelectedProject(null);
       }
+      void Promise.all(
+        response.data.map((p) =>
+          api
+            .get<Task[]>("/tasks", { params: { projectId: p.id } })
+            .then((r) =>
+              setProjectTaskCounts((prev) => ({ ...prev, [p.id]: r.data.length }))
+            )
+            .catch(() => {}),
+        ),
+      );
     } catch (error) {
       console.error(error);
       message.error("Не удалось загрузить проекты");
@@ -639,17 +649,15 @@ function App() {
     setSelectedTaskId(null);
   };
 
-  const defaultProjectId = selectedProject ?? projects[0]?.id ?? null;
-  const defaultProjectName =
-    projects.find((project) => project.id === defaultProjectId)?.name ?? null;
+  const inboxProject = projects.find((p) => p.isInbox) ?? null;
 
   const handleQuickCreate = async () => {
     if (!user) {
       message.warning("Авторизуйтесь, чтобы создавать задачи");
       return;
     }
-    if (!defaultProjectId) {
-      message.warning("Нет доступных проектов");
+    if (!inboxProject) {
+      message.warning("Проект «Входящие» недоступен");
       return;
     }
     if (!quickTitle.trim()) {
@@ -661,9 +669,9 @@ function App() {
       const response = await api.post<Task>("/tasks", {
         title: quickTitle,
         description: quickDescription,
-        projectId: defaultProjectId,
+        projectId: inboxProject.id,
       });
-      if (defaultProjectId === selectedProject) {
+      if (inboxProject.id === selectedProject) {
         setTasks((prev) => [
           { ...response.data, comments: response.data.comments ?? [] },
           ...prev,
@@ -957,8 +965,7 @@ function App() {
             title={quickTitle}
             description={quickDescription}
             creating={quickCreating}
-            hasProject={!!defaultProjectId && !loadingProjects}
-            defaultProjectName={defaultProjectName}
+            hasProject={!!inboxProject && !loadingProjects}
             onTitleChange={setQuickTitle}
             onDescriptionChange={setQuickDescription}
             onSubmit={handleQuickCreate}
@@ -1009,6 +1016,7 @@ function App() {
               projectTaskCounts={projectTaskCounts}
               onSelectProject={handleProjectChange}
               onOpenCreateTask={() => setTaskModalOpen(true)}
+              onGoToQuick={() => setActivePage("quick")}
             />
 
             {projects.length === 0 && !loadingProjects ? (

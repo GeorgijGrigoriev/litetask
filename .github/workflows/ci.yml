@@ -25,6 +25,9 @@ jobs:
       - name: Run golangci-lint
         run: golangci-lint run --timeout=5m
 
+      - name: Run tests
+        run: go test -race ./...
+
   lint-web:
     runs-on: ubuntu-latest
     steps:

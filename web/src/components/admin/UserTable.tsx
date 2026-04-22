@@ -79,7 +79,7 @@ function UserTable({
                 }
                 options={projects.map((p) => ({
                   value: p.id,
-                  label: p.name,
+                  label: p.isInbox ? "Входящие" : p.name,
                 }))}
                 loading={loadingProjects}
                 disabled={updatingProjectsId === record.id}
