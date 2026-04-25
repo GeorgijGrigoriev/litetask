@@ -222,6 +222,15 @@ func (s *Server) handleTaskActions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(parts) == 2 && parts[1] == "project" {
+		if r.Method != http.MethodPatch {
+			writeError(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		s.moveTask(w, r, id)
+		return
+	}
+
 	if len(parts) == 2 && parts[1] == "comments" {
 		switch r.Method {
 		case http.MethodGet:
@@ -715,6 +724,57 @@ func (s *Server) updateStatus(w http.ResponseWriter, r *http.Request, id int64) 
 		return
 	}
 
+	writeJSON(w, toTaskResponse(updated, comments))
+}
+
+func (s *Server) moveTask(w http.ResponseWriter, r *http.Request, id int64) {
+	auth := getAuth(r)
+	existing, err := s.store.GetTask(r.Context(), id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, "task not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		writeError(w, "failed to load task", http.StatusInternalServerError)
+		return
+	}
+	if auth.isRestricted && !auth.canAccess(existing.ProjectID) {
+		writeError(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	var payload struct {
+		ProjectID int64 `json:"projectId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if payload.ProjectID <= 0 {
+		writeError(w, "projectId is required", http.StatusBadRequest)
+		return
+	}
+	if auth.isRestricted && !auth.canAccess(payload.ProjectID) {
+		writeError(w, "no access to target project", http.StatusForbidden)
+		return
+	}
+	updated, err := s.store.MoveTask(r.Context(), id, payload.ProjectID)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, "task not found", http.StatusNotFound)
+		return
+	}
+	if err != nil && strings.Contains(err.Error(), "project not found") {
+		writeError(w, "target project not found", http.StatusBadRequest)
+		return
+	}
+	if err != nil {
+		writeError(w, "failed to move task", http.StatusInternalServerError)
+		return
+	}
+	comments, err := s.store.ListTaskComments(r.Context(), id)
+	if err != nil {
+		writeError(w, "failed to load comments", http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, toTaskResponse(updated, comments))
 }
 

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -377,6 +378,42 @@ func TestUpdateUserPassword(t *testing.T) {
 
 	if _, err := st.UpdateUserPassword(ctx, 99999, "newpassword"); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("expected ErrNoRows for missing user, got %v", err)
+	}
+}
+
+func TestMoveTask(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	u := createUser(t, st, "mover@example.com")
+
+	p1, err := st.CreateProject(ctx, "Source")
+	if err != nil {
+		t.Fatalf("create project A: %v", err)
+	}
+	p2, err := st.CreateProject(ctx, "Target")
+	if err != nil {
+		t.Fatalf("create project B: %v", err)
+	}
+
+	task, err := st.InsertTask(ctx, "Task", "", "", p1.ID, u.ID)
+	if err != nil {
+		t.Fatalf("insert task: %v", err)
+	}
+
+	moved, err := st.MoveTask(ctx, task.ID, p2.ID)
+	if err != nil {
+		t.Fatalf("MoveTask: %v", err)
+	}
+	if moved.ProjectID != p2.ID {
+		t.Fatalf("expected projectID %d, got %d", p2.ID, moved.ProjectID)
+	}
+
+	if _, err := st.MoveTask(ctx, task.ID, 99999); err == nil || !strings.Contains(err.Error(), "project not found") {
+		t.Fatalf("expected 'project not found' error, got %v", err)
+	}
+
+	if _, err := st.MoveTask(ctx, 99999, p1.ID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("expected ErrNoRows for missing task, got %v", err)
 	}
 }
 

@@ -47,6 +47,7 @@ function App() {
   const [quickCreating, setQuickCreating] = useState(false);
   const [addingComment, setAddingComment] = useState(false);
   const [deletingTaskId, setDeletingTaskId] = useState<number | null>(null);
+  const [movingTaskId, setMovingTaskId] = useState<number | null>(null);
   const [deletingCommentId, setDeletingCommentId] = useState<number | null>(
     null,
   );
@@ -521,6 +522,23 @@ function App() {
       message.error("Не удалось удалить задачу");
     } finally {
       setDeletingTaskId(null);
+    }
+  };
+
+  const moveTask = async (taskId: number, newProjectId: number) => {
+    setMovingTaskId(taskId);
+    try {
+      await api.patch(`/tasks/${taskId}/project`, { projectId: newProjectId });
+      setTasks((prev) => prev.filter((t) => t.id !== taskId));
+      if (selectedTaskId === taskId) {
+        closeTaskDetails();
+      }
+      message.success("Задача перемещена");
+    } catch (error) {
+      console.error(error);
+      message.error("Не удалось переместить задачу");
+    } finally {
+      setMovingTaskId(null);
     }
   };
 
@@ -1046,6 +1064,11 @@ function App() {
                 onCommentDraftChange={setCommentDraft}
                 onAddComment={() => void addComment()}
                 onDeleteComment={(commentId) => void deleteComment(commentId)}
+                projects={projects}
+                movingTaskId={movingTaskId}
+                onMoveTask={(taskId, projectId) =>
+                  void moveTask(taskId, projectId)
+                }
               />
             ) : (
               <Board groupedTasks={grouped} onSelectTask={openTaskDetails} />
