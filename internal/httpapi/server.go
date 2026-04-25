@@ -74,6 +74,7 @@ type meResponse struct {
 	FirstName string `json:"firstName"`
 	LastName  string `json:"lastName"`
 	Telegram  string `json:"telegram"`
+	Language  string `json:"language"`
 }
 
 func userToResponse(u store.User, projectIDs []int64) userResponse {
@@ -97,6 +98,7 @@ func userToMe(u store.User) meResponse {
 		FirstName: u.FirstName,
 		LastName:  u.LastName,
 		Telegram:  u.Telegram,
+		Language:  u.Language,
 	}
 }
 

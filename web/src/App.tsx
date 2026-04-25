@@ -130,6 +130,9 @@ function App() {
               lastName: lastName?.trim() ?? "",
             });
       setUser(response.data);
+      if (response.data.language) {
+        setLang(response.data.language as LangCode);
+      }
       message.success(
         mode === "login" ? t("auth.loginSuccess") : t("auth.registerSuccess"),
       );
