@@ -42,6 +42,7 @@ export type User = {
   lastName?: string | null;
   projectIds?: number[] | null;
   telegram?: string | null;
+  language?: string | null;
 };
 
 export type AutoRefreshIntervalMs = 5000 | 30000 | 60000 | 300000;

@@ -1,5 +1,6 @@
 import { Button, Col, Form, Input, Row, Select, Space } from "antd";
 
+import { useTranslation } from "../../i18n";
 import type { User } from "../../types";
 
 type UserFormValues = {
@@ -17,6 +18,7 @@ type UserFormProps = {
 };
 
 function UserForm({ creatingUser, onCreateUser }: UserFormProps) {
+  const { t } = useTranslation();
   return (
     <Form
       layout="vertical"
@@ -27,29 +29,29 @@ function UserForm({ creatingUser, onCreateUser }: UserFormProps) {
     >
       <Row gutter={[16, 8]}>
         <Col xs={24} md={8}>
-          <Form.Item name="firstName" label="Имя">
-            <Input placeholder="Имя" />
+          <Form.Item name="firstName" label={t("auth.firstName")}>
+            <Input placeholder={t("auth.firstName")} />
           </Form.Item>
         </Col>
         <Col xs={24} md={8}>
-          <Form.Item name="lastName" label="Фамилия">
-            <Input placeholder="Фамилия" />
+          <Form.Item name="lastName" label={t("auth.lastName")}>
+            <Input placeholder={t("auth.lastName")} />
           </Form.Item>
         </Col>
         <Col xs={24} md={8}>
           <Form.Item
             name="username"
-            label="Юзернейм"
+            label={t("auth.username")}
             rules={[
-              { required: true, message: "Введите юзернейм" },
-              { min: 3, max: 32, message: "От 3 до 32 символов" },
+              { required: true, message: t("auth.usernameRequired") },
+              { min: 3, max: 32, message: t("auth.usernameLength") },
               {
                 pattern: /^[A-Za-z0-9_.-]+$/,
-                message: "Допустимы a-z, 0-9, _, ., -",
+                message: t("auth.usernamePattern"),
               },
             ]}
           >
-            <Input placeholder="юзернейм" autoCapitalize="none" />
+            <Input placeholder={t("auth.usernamePlaceholder")} autoCapitalize="none" />
           </Form.Item>
         </Col>
         <Col xs={24} md={8}>
@@ -57,7 +59,7 @@ function UserForm({ creatingUser, onCreateUser }: UserFormProps) {
             name="email"
             label="Email"
             rules={[
-              { required: true, type: "email", message: "Введите email" },
+              { required: true, type: "email", message: t("auth.emailRequired") },
             ]}
           >
             <Input placeholder="email@example.com" />
@@ -66,19 +68,19 @@ function UserForm({ creatingUser, onCreateUser }: UserFormProps) {
         <Col xs={24} md={8}>
           <Form.Item
             name="password"
-            label="Пароль"
-            rules={[{ required: true, min: 6, message: "Минимум 6 символов" }]}
+            label={t("auth.password")}
+            rules={[{ required: true, min: 6, message: t("auth.passwordMinLength") }]}
           >
-            <Input.Password placeholder="Пароль" />
+            <Input.Password placeholder={t("auth.password")} />
           </Form.Item>
         </Col>
         <Col xs={24} md={8}>
-          <Form.Item name="role" label="Роль" rules={[{ required: true }]}>
+          <Form.Item name="role" label={t("admin.role")} rules={[{ required: true }]}>
             <Select
               options={[
-                { label: "Пользователь", value: "user" },
-                { label: "Админ", value: "admin" },
-                { label: "Заблокирован", value: "blocked" },
+                { label: t("admin.roleUser"), value: "user" },
+                { label: t("admin.roleAdmin"), value: "admin" },
+                { label: t("admin.roleBlocked"), value: "blocked" },
               ]}
             />
           </Form.Item>
@@ -86,7 +88,7 @@ function UserForm({ creatingUser, onCreateUser }: UserFormProps) {
       </Row>
       <Space className="user-form-actions" size="middle">
         <Button type="primary" htmlType="submit" loading={creatingUser}>
-          Добавить пользователя
+          {t("admin.addUser")}
         </Button>
       </Space>
     </Form>

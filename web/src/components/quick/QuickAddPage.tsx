@@ -1,5 +1,7 @@
 import { Button, Card, Empty, Input, Space, Typography } from "antd";
 
+import { useTranslation } from "../../i18n";
+
 type QuickAddPageProps = {
   title: string;
   description: string;
@@ -21,31 +23,32 @@ function QuickAddPage({
   onSubmit,
   onGoToBoard,
 }: QuickAddPageProps) {
+  const { t } = useTranslation();
   return (
-    <Card className="quick-card" title="Быстрый ввод задачи">
+    <Card className="quick-card" title={t("quick.title")}>
       {!hasProject ? (
         <>
-          <Empty description="Проект «Входящие» недоступен. Обратитесь к администратору." />
+          <Empty description={t("quick.inboxUnavailableLong")} />
           <div style={{ marginTop: 12 }}>
             <Button type="default" onClick={onGoToBoard}>
-              К списку задач
+              {t("task.backToList")}
             </Button>
           </div>
         </>
       ) : (
         <Space direction="vertical" size="middle" className="quick-form">
           <Typography.Text type="secondary">
-            Проект: <strong>Входящие</strong>
+            {t("quick.project")} <strong>{t("common.inbox")}</strong>
           </Typography.Text>
           <Input
-            placeholder="Тема"
+            placeholder={t("quick.titlePlaceholder")}
             value={title}
             onChange={(e) => onTitleChange(e.target.value)}
             onPressEnter={onSubmit}
             maxLength={140}
           />
           <Input.TextArea
-            placeholder="Описание (опционально)"
+            placeholder={t("quick.descriptionPlaceholder")}
             value={description}
             onChange={(e) => onDescriptionChange(e.target.value)}
             autoSize={{ minRows: 4, maxRows: 8 }}
@@ -57,10 +60,10 @@ function QuickAddPage({
               loading={creating}
               disabled={!title.trim()}
             >
-              Добавить задачу
+              {t("task.add")}
             </Button>
             <Button type="default" onClick={onGoToBoard}>
-              К списку задач
+              {t("task.backToList")}
             </Button>
           </Space>
         </Space>

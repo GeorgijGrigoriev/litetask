@@ -1,6 +1,7 @@
 import { Input, Modal, Select, Space } from "antd";
 
 import { priorityMeta, priorityOrder } from "../../constants";
+import { useTranslation } from "../../i18n";
 import type { PriorityKey } from "../../types";
 
 type CreateTaskModalProps = {
@@ -30,26 +31,27 @@ function CreateTaskModal({
   onCreate,
   onClose,
 }: CreateTaskModalProps) {
+  const { t } = useTranslation();
   return (
     <Modal
-      title="Новая задача"
+      title={t("task.newTitle")}
       open={open}
       onCancel={onClose}
       onOk={onCreate}
       okButtonProps={{ loading: creating, disabled: !canCreate }}
-      cancelText="Отмена"
-      okText="Создать"
+      cancelText={t("common.cancel")}
+      okText={t("common.create")}
     >
       <Space direction="vertical" size="small" className="create-column">
         <Input
-          placeholder="Новая задача"
+          placeholder={t("task.titlePlaceholder")}
           value={title}
           onChange={(e) => onTitleChange(e.target.value)}
           onPressEnter={onCreate}
           maxLength={140}
         />
         <Input.TextArea
-          placeholder="Описание задачи (необязательно)"
+          placeholder={t("task.descriptionPlaceholder")}
           value={description}
           onChange={(e) => onDescriptionChange(e.target.value)}
           autoSize={{ minRows: 3, maxRows: 5 }}
@@ -59,7 +61,7 @@ function CreateTaskModal({
           onChange={onPriorityChange}
           style={{ width: "100%" }}
           options={priorityOrder.map((p) => ({
-            label: priorityMeta[p].label,
+            label: t(priorityMeta[p].label),
             value: p,
           }))}
         />

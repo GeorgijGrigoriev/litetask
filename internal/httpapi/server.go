@@ -74,6 +74,7 @@ type meResponse struct {
 	FirstName string `json:"firstName"`
 	LastName  string `json:"lastName"`
 	Telegram  string `json:"telegram"`
+	Language  string `json:"language"`
 }
 
 func userToResponse(u store.User, projectIDs []int64) userResponse {
@@ -97,6 +98,7 @@ func userToMe(u store.User) meResponse {
 		FirstName: u.FirstName,
 		LastName:  u.LastName,
 		Telegram:  u.Telegram,
+		Language:  u.Language,
 	}
 }
 
@@ -449,7 +451,7 @@ func (s *Server) handleUserActions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if payload.FirstName != nil || payload.LastName != nil {
-		updated, err = s.store.UpdateUserProfile(r.Context(), id, nil, nil, payload.FirstName, payload.LastName)
+		updated, err = s.store.UpdateUserProfile(r.Context(), id, nil, nil, payload.FirstName, payload.LastName, nil)
 		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, "user not found", http.StatusNotFound)
 			return
@@ -1145,12 +1147,13 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 			FirstName *string `json:"firstName"`
 			LastName  *string `json:"lastName"`
 			Username  *string `json:"username"`
+			Language  *string `json:"language"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			writeError(w, "invalid request body", http.StatusBadRequest)
 			return
 		}
-		if payload.Password == nil && payload.Telegram == nil && payload.FirstName == nil && payload.LastName == nil && payload.Username == nil {
+		if payload.Password == nil && payload.Telegram == nil && payload.FirstName == nil && payload.LastName == nil && payload.Username == nil && payload.Language == nil {
 			writeError(w, "nothing to update", http.StatusBadRequest)
 			return
 		}
@@ -1194,7 +1197,7 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		updated, err := s.store.UpdateUserProfile(r.Context(), u.ID, payload.Password, payload.Telegram, payload.FirstName, payload.LastName)
+		updated, err := s.store.UpdateUserProfile(r.Context(), u.ID, payload.Password, payload.Telegram, payload.FirstName, payload.LastName, payload.Language)
 		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, "user not found", http.StatusNotFound)
 			return

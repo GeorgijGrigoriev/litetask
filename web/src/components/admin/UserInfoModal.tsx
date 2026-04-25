@@ -1,5 +1,6 @@
 import { Input, Modal, Space } from "antd";
 
+import { useTranslation } from "../../i18n";
 import type { User } from "../../types";
 
 type UserInfoModalProps = {
@@ -23,24 +24,29 @@ function UserInfoModal({
   onSave,
   onClose,
 }: UserInfoModalProps) {
+  const { t } = useTranslation();
   return (
     <Modal
-      title={user ? `Данные пользователя: ${user.email}` : "Данные пользователя"}
+      title={
+        user
+          ? t("admin.userInfoTitle", { email: user.email })
+          : t("admin.userInfoTitleSimple")
+      }
       open={!!user}
       onCancel={onClose}
       onOk={onSave}
-      okText="Сохранить"
-      cancelText="Отмена"
+      okText={t("common.save")}
+      cancelText={t("common.cancel")}
       confirmLoading={saving}
     >
       <Space direction="vertical" size="middle" style={{ width: "100%" }}>
         <Input
-          placeholder="Имя"
+          placeholder={t("auth.firstName")}
           value={firstName}
           onChange={(e) => onFirstNameChange(e.target.value)}
         />
         <Input
-          placeholder="Фамилия"
+          placeholder={t("auth.lastName")}
           value={lastName}
           onChange={(e) => onLastNameChange(e.target.value)}
         />

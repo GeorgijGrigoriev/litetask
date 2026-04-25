@@ -1,5 +1,6 @@
 import { Input, Modal } from "antd";
 
+import { useTranslation } from "../../i18n";
 import type { User } from "../../types";
 
 type PasswordModalProps = {
@@ -19,24 +20,29 @@ function PasswordModal({
   onSave,
   onClose,
 }: PasswordModalProps) {
+  const { t } = useTranslation();
   return (
     <Modal
-      title={user ? `Смена пароля: ${user.email}` : "Смена пароля"}
+      title={
+        user
+          ? t("admin.passwordModalTitle", { email: user.email })
+          : t("admin.passwordModalTitleSimple")
+      }
       open={!!user}
-      okText="Обновить пароль"
-      cancelText="Отмена"
+      okText={t("admin.updatePassword")}
+      cancelText={t("common.cancel")}
       onOk={onSave}
       onCancel={onClose}
       confirmLoading={updatingPassword}
     >
       <Input.Password
-        placeholder="Новый пароль"
+        placeholder={t("profile.newPassword")}
         value={newPassword}
         onChange={(e) => onPasswordChange(e.target.value)}
         onPressEnter={onSave}
       />
       <div className="auth-error" style={{ marginTop: 8 }}>
-        Минимум 6 символов
+        {t("auth.passwordMinLength")}
       </div>
     </Modal>
   );

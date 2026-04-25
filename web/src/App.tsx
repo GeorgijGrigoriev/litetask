@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import "./App.css";
 import api from "./api";
 import { AUTO_REFRESH_INTERVAL_STORAGE_KEY } from "./constants";
+import { useTranslation, type LangCode } from "./i18n";
 import AuthCard from "./components/auth/AuthCard";
 import PasswordModal from "./components/admin/PasswordModal";
 import UserForm from "./components/admin/UserForm";
@@ -29,6 +30,8 @@ import type {
 } from "./types";
 
 function App() {
+  const { t, lang, setLang } = useTranslation();
+
   const [tasks, setTasks] = useState<Task[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<number | null>(null);
@@ -84,6 +87,7 @@ function App() {
   const [profileFirstName, setProfileFirstName] = useState("");
   const [profileLastName, setProfileLastName] = useState("");
   const [profileUsername, setProfileUsername] = useState("");
+  const [profileLanguage, setProfileLanguage] = useState<LangCode>(lang);
   const [profileSaving, setProfileSaving] = useState(false);
   const [editingUserInfo, setEditingUserInfo] = useState<User | null>(null);
   const [editingUserFirstName, setEditingUserFirstName] = useState("");
@@ -96,6 +100,9 @@ function App() {
     try {
       const response = await api.get<User>("/auth/me");
       setUser(response.data);
+      if (response.data.language) {
+        setLang(response.data.language as LangCode);
+      }
     } catch {
       setUser(null);
     }
@@ -123,8 +130,11 @@ function App() {
               lastName: lastName?.trim() ?? "",
             });
       setUser(response.data);
+      if (response.data.language) {
+        setLang(response.data.language as LangCode);
+      }
       message.success(
-        mode === "login" ? "Вход выполнен" : "Регистрация успешна",
+        mode === "login" ? t("auth.loginSuccess") : t("auth.registerSuccess"),
       );
       void loadProjects();
       void loadTasks();
@@ -132,20 +142,20 @@ function App() {
       console.error(error);
       if (axios.isAxiosError(error)) {
         if (error.response?.status === 403 && mode === "register") {
-          setAuthError("Регистрация отключена");
+          setAuthError(t("auth.registrationDisabled"));
         } else if (error.response?.status === 401) {
-          setAuthError("Неверные учетные данные");
+          setAuthError(t("auth.invalidCredentials"));
         } else if (error.response?.data) {
           setAuthError(
             typeof error.response.data === "string"
               ? error.response.data
-              : "Ошибка",
+              : t("common.error"),
           );
         } else {
-          setAuthError("Ошибка запроса");
+          setAuthError(t("common.requestError"));
         }
       } else {
-        setAuthError("Ошибка запроса");
+        setAuthError(t("common.requestError"));
       }
     } finally {
       setAuthLoading(false);
@@ -229,7 +239,7 @@ function App() {
       } catch (error) {
         console.error(error);
         if (!options?.silent) {
-          message.error("Не удалось загрузить задачи");
+          message.error(t("task.loadError"));
         }
       } finally {
         if (!options?.silent) {
@@ -237,7 +247,7 @@ function App() {
         }
       }
     },
-    [selectedProject, selectedTaskId, user],
+    [selectedProject, selectedTaskId, t, user],
   );
 
   const loadProjects = useCallback(async () => {
@@ -273,11 +283,11 @@ function App() {
       );
     } catch (error) {
       console.error(error);
-      message.error("Не удалось загрузить проекты");
+      message.error(t("project.loadError"));
     } finally {
       setLoadingProjects(false);
     }
-  }, [selectedProject, user]);
+  }, [selectedProject, t, user]);
 
   useEffect(() => {
     void fetchMe();
@@ -352,15 +362,15 @@ function App() {
 
   const handleCreate = async () => {
     if (!user) {
-      message.warning("Авторизуйтесь, чтобы создавать задачи");
+      message.warning(t("auth.requiredForTasks"));
       return;
     }
     if (!selectedProject) {
-      message.warning("Сначала выберите проект");
+      message.warning(t("task.selectProjectFirst"));
       return;
     }
     if (!title.trim()) {
-      message.warning("Введите название задачи");
+      message.warning(t("task.titleRequired"));
       return;
     }
     setCreating(true);
@@ -379,10 +389,10 @@ function App() {
       setDescription("");
       setNewTaskPriority("medium");
       setTaskModalOpen(false);
-      message.success("Задача создана");
+      message.success(t("task.createSuccess"));
     } catch (error) {
       console.error(error);
-      message.error("Не удалось создать задачу");
+      message.error(t("task.createError"));
     } finally {
       setCreating(false);
     }
@@ -401,10 +411,10 @@ function App() {
       setTasks((prev) =>
         prev.map((task) => (task.id === taskId ? updatedTask : task)),
       );
-      message.success("Статус обновлен");
+      message.success(t("task.statusUpdated"));
     } catch (error) {
       console.error(error);
-      message.error("Не удалось обновить статус");
+      message.error(t("task.statusUpdateError"));
     } finally {
       setUpdatingId(null);
     }
@@ -435,10 +445,10 @@ function App() {
       );
       setEditingId(null);
       setDescriptionDraft("");
-      message.success("Описание обновлено");
+      message.success(t("task.descriptionUpdated"));
     } catch (error) {
       console.error(error);
-      message.error("Не удалось обновить описание");
+      message.error(t("task.descriptionUpdateError"));
     } finally {
       setUpdatingId(null);
     }
@@ -458,7 +468,7 @@ function App() {
       );
     } catch (error) {
       console.error(error);
-      message.error("Не удалось загрузить комментарии");
+      message.error(t("task.commentsLoadError"));
     }
   };
 
@@ -484,7 +494,7 @@ function App() {
     }
     const text = commentDraft.trim();
     if (!text) {
-      message.warning("Введите текст комментария");
+      message.warning(t("task.commentRequired"));
       return;
     }
     setAddingComment(true);
@@ -504,10 +514,10 @@ function App() {
         ),
       );
       setCommentDraft("");
-      message.success("Комментарий добавлен");
+      message.success(t("task.commentAdded"));
     } catch (error) {
       console.error(error);
-      message.error("Не удалось добавить комментарий");
+      message.error(t("task.commentAddError"));
     } finally {
       setAddingComment(false);
     }
@@ -521,10 +531,10 @@ function App() {
       if (selectedTaskId === taskId) {
         closeTaskDetails();
       }
-      message.success("Задача удалена");
+      message.success(t("task.deleteSuccess"));
     } catch (error) {
       console.error(error);
-      message.error("Не удалось удалить задачу");
+      message.error(t("task.deleteError"));
     } finally {
       setDeletingTaskId(null);
     }
@@ -534,14 +544,14 @@ function App() {
     setMovingTaskId(taskId);
     try {
       await api.patch(`/tasks/${taskId}/project`, { projectId: newProjectId });
-      setTasks((prev) => prev.filter((t) => t.id !== taskId));
+      setTasks((prev) => prev.filter((task) => task.id !== taskId));
       if (selectedTaskId === taskId) {
         closeTaskDetails();
       }
-      message.success("Задача перемещена");
+      message.success(t("task.moveSuccess"));
     } catch (error) {
       console.error(error);
-      message.error("Не удалось переместить задачу");
+      message.error(t("task.moveError"));
     } finally {
       setMovingTaskId(null);
     }
@@ -552,16 +562,16 @@ function App() {
     try {
       const response = await api.patch<Task>(`/tasks/${taskId}/priority`, { priority });
       setTasks((prev) =>
-        prev.map((t) =>
-          t.id === taskId
+        prev.map((task) =>
+          task.id === taskId
             ? { ...response.data, comments: response.data.comments ?? [] }
-            : t,
+            : task,
         ),
       );
-      message.success("Приоритет обновлен");
+      message.success(t("task.priorityUpdated"));
     } catch (error) {
       console.error(error);
-      message.error("Не удалось обновить приоритет");
+      message.error(t("task.priorityUpdateError"));
     } finally {
       setUpdatingId(null);
     }
@@ -586,10 +596,10 @@ function App() {
             : task,
         ),
       );
-      message.success("Комментарий удален");
+      message.success(t("task.commentDeleted"));
     } catch (error) {
       console.error(error);
-      message.error("Не удалось удалить комментарий");
+      message.error(t("task.commentDeleteError"));
     } finally {
       setDeletingCommentId(null);
     }
@@ -603,10 +613,12 @@ function App() {
       firstName?: string;
       lastName?: string;
       username?: string;
+      language?: string;
     } = {
       telegram: profileTelegram,
       firstName: profileFirstName,
       lastName: profileLastName,
+      language: profileLanguage,
     };
     if (!user.username?.trim() && profileUsername.trim()) {
       payload.username = profileUsername.trim();
@@ -614,7 +626,7 @@ function App() {
     if (profilePassword.trim()) {
       payload.password = profilePassword.trim();
       if (payload.password.length < 6) {
-        message.error("Пароль должен быть не меньше 6 символов");
+        message.error(t("auth.passwordTooShort"));
         return;
       }
     }
@@ -622,12 +634,13 @@ function App() {
       setProfileSaving(true);
       const response = await api.patch<User>("/profile", payload);
       setUser(response.data);
+      setLang(profileLanguage);
       setProfilePassword("");
       setProfileTelegram(response.data.telegram ?? "");
       setProfileFirstName(response.data.firstName ?? "");
       setProfileLastName(response.data.lastName ?? "");
       setProfileUsername(response.data.username ?? "");
-      message.success("Профиль обновлен");
+      message.success(t("profile.updateSuccess"));
       setProfileModalOpen(false);
     } catch (error) {
       console.error(error);
@@ -635,10 +648,10 @@ function App() {
         const errMsg =
           typeof error.response.data === "string"
             ? error.response.data
-            : "Не удалось обновить профиль";
+            : t("profile.updateError");
         message.error(errMsg);
       } else {
-        message.error("Не удалось обновить профиль");
+        message.error(t("profile.updateError"));
       }
     } finally {
       setProfileSaving(false);
@@ -677,11 +690,11 @@ function App() {
           projectIds: response.data.projectIds ?? user.projectIds,
         });
       }
-      message.success("Данные пользователя обновлены");
+      message.success(t("admin.userInfoUpdated"));
       setEditingUserInfo(null);
     } catch (error) {
       console.error(error);
-      message.error("Не удалось обновить данные пользователя");
+      message.error(t("admin.userInfoUpdateError"));
     } finally {
       setSavingUserInfo(false);
     }
@@ -696,15 +709,15 @@ function App() {
 
   const handleQuickCreate = async () => {
     if (!user) {
-      message.warning("Авторизуйтесь, чтобы создавать задачи");
+      message.warning(t("auth.requiredForTasks"));
       return;
     }
     if (!inboxProject) {
-      message.warning("Проект «Входящие» недоступен");
+      message.warning(t("quick.inboxUnavailable"));
       return;
     }
     if (!quickTitle.trim()) {
-      message.warning("Введите тему задачи");
+      message.warning(t("quick.titleRequired"));
       return;
     }
     setQuickCreating(true);
@@ -722,10 +735,10 @@ function App() {
       }
       setQuickTitle("");
       setQuickDescription("");
-      message.success("Задача создана");
+      message.success(t("task.createSuccess"));
     } catch (error) {
       console.error(error);
-      message.error("Не удалось создать задачу");
+      message.error(t("task.createError"));
     } finally {
       setQuickCreating(false);
     }
@@ -733,12 +746,12 @@ function App() {
 
   const handleCreateProject = async () => {
     if (!user) {
-      message.warning("Авторизуйтесь, чтобы создавать проекты");
+      message.warning(t("auth.requiredForProjects"));
       return;
     }
     const name = newProjectName.trim();
     if (!name) {
-      message.warning("Введите название проекта");
+      message.warning(t("project.nameRequired"));
       return;
     }
     setCreatingProject(true);
@@ -747,13 +760,13 @@ function App() {
       setProjects((prev) => [response.data, ...prev]);
       setSelectedProject(response.data.id);
       setNewProjectName("");
-      message.success("Проект создан");
+      message.success(t("project.createSuccess"));
     } catch (error) {
       console.error(error);
       if (axios.isAxiosError(error) && error.response?.status === 400) {
-        message.error("Проект с таким названием уже существует");
+        message.error(t("project.alreadyExists"));
       } else {
-        message.error("Не удалось создать проект");
+        message.error(t("project.createError"));
       }
     } finally {
       setCreatingProject(false);
@@ -765,7 +778,7 @@ function App() {
       return;
     }
     if (user?.role !== "admin") {
-      message.error("Удаление проектов доступно только администратору");
+      message.error(t("project.adminOnly"));
       return;
     }
     setDeletingProject(true);
@@ -779,13 +792,13 @@ function App() {
         setSelectedProject(null);
         setTasks([]);
       }
-      message.success("Проект удален");
+      message.success(t("project.deleteSuccess"));
     } catch (error) {
       console.error(error);
       if (axios.isAxiosError(error) && error.response?.status === 400) {
-        message.error("Нельзя удалить проект по умолчанию");
+        message.error(t("project.cannotDeleteDefault"));
       } else {
-        message.error("Не удалось удалить проект");
+        message.error(t("project.deleteError"));
       }
     } finally {
       setDeletingProject(false);
@@ -803,11 +816,11 @@ function App() {
       setUsers(response.data);
     } catch (error) {
       console.error(error);
-      message.error("Не удалось загрузить пользователей");
+      message.error(t("admin.usersLoadError"));
     } finally {
       setLoadingUsers(false);
     }
-  }, [user]);
+  }, [t, user]);
 
   useEffect(() => {
     if (activePage === "settings" && user?.role === "admin") {
@@ -829,7 +842,7 @@ function App() {
             : u,
         ),
       );
-      message.success("Роль обновлена");
+      message.success(t("admin.roleUpdated"));
       if (response.data.id === user?.id) {
         setUser({
           ...user,
@@ -849,10 +862,10 @@ function App() {
         const errMsg =
           typeof error.response.data === "string"
             ? error.response.data
-            : "Не удалось обновить роль";
+            : t("admin.roleUpdateError");
         message.error(errMsg);
       } else {
-        message.error("Не удалось обновить роль");
+        message.error(t("admin.roleUpdateError"));
       }
     } finally {
       setUpdatingUserId(null);
@@ -875,14 +888,14 @@ function App() {
             : u,
         ),
       );
-      message.success("Доступы обновлены");
+      message.success(t("admin.projectsUpdated"));
       if (response.data.id === user?.id) {
         setUser({ ...user, projectIds: response.data.projectIds ?? [] });
         void loadProjects();
       }
     } catch (error) {
       console.error(error);
-      message.error("Не удалось обновить доступы к проектам");
+      message.error(t("admin.projectsUpdateError"));
     } finally {
       setUpdatingProjectsId(null);
     }
@@ -900,32 +913,32 @@ function App() {
     try {
       const response = await api.post<User>("/users", values);
       setUsers((prev) => [response.data, ...prev]);
-      message.success("Пользователь создан");
+      message.success(t("admin.userCreated"));
     } catch (error) {
       console.error(error);
       if (axios.isAxiosError(error) && error.response?.data) {
         const errMsg =
           typeof error.response.data === "string"
             ? error.response.data
-            : "Не удалось создать пользователя";
+            : t("admin.userCreateError");
         message.error(errMsg);
       } else {
-        message.error("Не удалось создать пользователя");
+        message.error(t("admin.userCreateError"));
       }
     } finally {
       setCreatingUser(false);
     }
   };
 
-  const openPasswordModal = (user: User) => {
-    setPasswordModalUser(user);
+  const openPasswordModal = (u: User) => {
+    setPasswordModalUser(u);
     setNewPassword("");
   };
 
   const handlePasswordChange = async () => {
     if (!passwordModalUser) return;
     if (newPassword.trim().length < 6) {
-      message.error("Пароль должен быть не меньше 6 символов");
+      message.error(t("auth.passwordTooShort"));
       return;
     }
     setUpdatingPassword(true);
@@ -933,12 +946,12 @@ function App() {
       await api.patch<User>(`/users/${passwordModalUser.id}`, {
         password: newPassword.trim(),
       });
-      message.success("Пароль обновлен");
+      message.success(t("admin.passwordUpdated"));
       setPasswordModalUser(null);
       setNewPassword("");
     } catch (error) {
       console.error(error);
-      message.error("Не удалось обновить пароль");
+      message.error(t("admin.passwordUpdateError"));
     } finally {
       setUpdatingPassword(false);
     }
@@ -994,6 +1007,7 @@ function App() {
           setProfileLastName(user.lastName ?? "");
           setProfileUsername(user.username ?? "");
           setProfilePassword("");
+          setProfileLanguage((user.language as LangCode) ?? lang);
           setProfileModalOpen(true);
           setMobileNavOpen(false);
         }}
@@ -1028,7 +1042,7 @@ function App() {
               onDeleteProject={handleDeleteProject}
               deletingProject={deletingProject}
             />
-            <Card className="create-card" title="Пользователи">
+            <Card className="create-card" title={t("admin.usersTitle")}>
               <UserForm
                 creatingUser={creatingUser}
                 onCreateUser={handleCreateUser}
@@ -1069,10 +1083,10 @@ function App() {
             />
 
             {projects.length === 0 && !loadingProjects ? (
-              <Empty description="Создайте проект, чтобы начать" />
+              <Empty description={t("project.createToStart")} />
             ) : loading ? (
               <div className="loader">
-                <Spin tip="Загрузка задач..." size="large" />
+                <Spin tip={t("common.loadingTasks")} size="large" />
               </div>
             ) : selectedTask ? (
               <TaskDetailCard
@@ -1123,11 +1137,13 @@ function App() {
         profileUsername={profileUsername}
         profileTelegram={profileTelegram}
         profilePassword={profilePassword}
+        profileLanguage={profileLanguage}
         onFirstNameChange={setProfileFirstName}
         onLastNameChange={setProfileLastName}
         onUsernameChange={setProfileUsername}
         onTelegramChange={setProfileTelegram}
         onPasswordChange={setProfilePassword}
+        onLanguageChange={setProfileLanguage}
         onSave={() => void handleUpdateProfile()}
         onClose={() => setProfileModalOpen(false)}
       />
