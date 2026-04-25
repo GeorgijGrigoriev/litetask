@@ -142,7 +142,7 @@ func (s *Store) InsertTask(ctx context.Context, title, description, authorLabel 
 		return t, fmt.Errorf("project not found")
 	}
 	if _, ok := allowedPriorities[priority]; !ok {
-		priority = "medium"
+		return t, ErrInvalidPriority
 	}
 
 	res, err := s.db.ExecContext(ctx,

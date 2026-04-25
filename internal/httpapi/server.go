@@ -666,6 +666,9 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	if payload.ProjectID == 0 {
 		payload.ProjectID = store.DefaultProjectID
 	}
+	if payload.Priority == "" {
+		payload.Priority = "medium"
+	}
 	if auth.isRestricted && !auth.canAccess(payload.ProjectID) {
 		writeError(w, "forbidden", http.StatusForbidden)
 		return
@@ -681,6 +684,10 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 
 	created, err := s.store.InsertTask(r.Context(), payload.Title, payload.Description, "", payload.ProjectID, auth.user.ID, payload.Priority)
 	if err != nil {
+		if errors.Is(err, store.ErrInvalidPriority) {
+			writeError(w, "invalid priority", http.StatusBadRequest)
+			return
+		}
 		if strings.Contains(err.Error(), "project not found") {
 			writeError(w, "project not found", http.StatusBadRequest)
 			return
