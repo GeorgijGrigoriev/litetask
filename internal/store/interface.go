@@ -6,9 +6,10 @@ import "context"
 type Storer interface {
 	Close() error
 
-	InsertTask(ctx context.Context, title, description, authorLabel string, projectID, createdBy int64) (Task, error)
+	InsertTask(ctx context.Context, title, description, authorLabel string, projectID, createdBy int64, priority string) (Task, error)
 	GetTask(ctx context.Context, id int64) (Task, error)
 	SetTaskStatus(ctx context.Context, id int64, status string) (Task, error)
+	SetTaskPriority(ctx context.Context, id int64, priority string) (Task, error)
 	SetTaskDescription(ctx context.Context, id int64, description string) (Task, error)
 	DeleteTask(ctx context.Context, id int64) error
 	MoveTask(ctx context.Context, taskID, newProjectID int64) (Task, error)

@@ -1,5 +1,5 @@
 import { Badge, Card, Empty, Space, Tabs, Button } from "antd";
-import { PlusOutlined } from "@ant-design/icons";
+import { ArrowDownOutlined, ArrowUpOutlined, PlusOutlined, SwapOutlined } from "@ant-design/icons";
 
 import type { Project } from "../../types";
 
@@ -11,6 +11,8 @@ type ProjectTabsProps = {
   onSelectProject: (projectId: number) => void;
   onOpenCreateTask: () => void;
   onGoToQuick: () => void;
+  prioritySort: "asc" | "desc" | null;
+  onTogglePrioritySort: () => void;
 };
 
 function ProjectTabs({
@@ -21,6 +23,8 @@ function ProjectTabs({
   onSelectProject,
   onOpenCreateTask,
   onGoToQuick,
+  prioritySort,
+  onTogglePrioritySort,
 }: ProjectTabsProps) {
   return (
     <Card className="project-card project-card--compact">
@@ -36,6 +40,24 @@ function ProjectTabs({
             Добавить задачу
           </Button>
           <Button onClick={onGoToQuick}>Быстрый ввод</Button>
+          <Button
+            icon={
+              prioritySort === "asc"
+                ? <ArrowDownOutlined />
+                : prioritySort === "desc"
+                ? <ArrowUpOutlined />
+                : <SwapOutlined rotate={90} />
+            }
+            onClick={onTogglePrioritySort}
+            type={prioritySort !== null ? "primary" : "default"}
+            title="Сортировка по приоритету"
+          >
+            {prioritySort === "asc"
+              ? "Выс → Низ"
+              : prioritySort === "desc"
+              ? "Низ → Выс"
+              : "Приоритет"}
+          </Button>
         </Space>
         <div className="project-card-title">Проекты</div>
       </div>

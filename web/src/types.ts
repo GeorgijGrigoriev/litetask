@@ -1,5 +1,7 @@
 export type StatusKey = "new" | "in_progress" | "done";
 
+export type PriorityKey = "high" | "medium" | "low";
+
 export type TaskComment = {
   id: number;
   taskId: number;
@@ -13,6 +15,7 @@ export type Task = {
   id: number;
   title: string;
   status: StatusKey;
+  priority?: PriorityKey;
   description?: string | null;
   projectId: number;
   createdAt: string;

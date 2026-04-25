@@ -5,7 +5,7 @@ import {
 } from "@ant-design/icons";
 import { type ReactNode } from "react";
 
-import type { StatusKey } from "./types";
+import type { PriorityKey, StatusKey } from "./types";
 
 export const statusOrder: StatusKey[] = ["new", "in_progress", "done"];
 
@@ -26,6 +26,14 @@ export const columnDescriptions: Record<StatusKey, string> = {
   new: "Все новые задачи появляются здесь",
   in_progress: "Задачи, над которыми ведется работа",
   done: "Завершенные задачи",
+};
+
+export const priorityOrder: PriorityKey[] = ["high", "medium", "low"];
+
+export const priorityMeta: Record<PriorityKey, { label: string; color: string }> = {
+  high:   { label: "Высокий", color: "red" },
+  medium: { label: "Средний", color: "orange" },
+  low:    { label: "Низкий",  color: "default" },
 };
 
 export const AUTO_REFRESH_INTERVAL_STORAGE_KEY =

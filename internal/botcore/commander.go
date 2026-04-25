@@ -72,7 +72,7 @@ func (c *Commander) handleNew(ctx context.Context, args string) string {
 	if ok, _ := c.store.ProjectExists(ctx, projectID); !ok {
 		return "Проект не найден"
 	}
-	t, err := c.store.InsertTask(ctx, title, description, c.botName, projectID, 0)
+	t, err := c.store.InsertTask(ctx, title, description, c.botName, projectID, 0, "medium")
 	if err != nil {
 		log.Printf("bot: failed to insert task: %v", err)
 		return "Не удалось создать задачу"

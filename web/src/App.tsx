@@ -20,6 +20,7 @@ import CreateTaskModal from "./components/tasks/CreateTaskModal";
 import TaskDetailCard from "./components/tasks/TaskDetailCard";
 import type {
   AutoRefreshIntervalMs,
+  PriorityKey,
   Project,
   StatusKey,
   Task,
@@ -48,6 +49,8 @@ function App() {
   const [addingComment, setAddingComment] = useState(false);
   const [deletingTaskId, setDeletingTaskId] = useState<number | null>(null);
   const [movingTaskId, setMovingTaskId] = useState<number | null>(null);
+  const [newTaskPriority, setNewTaskPriority] = useState<PriorityKey>("medium");
+  const [prioritySort, setPrioritySort] = useState<"asc" | "desc" | null>(null);
   const [deletingCommentId, setDeletingCommentId] = useState<number | null>(
     null,
   );
@@ -366,6 +369,7 @@ function App() {
         title,
         description,
         projectId: selectedProject,
+        priority: newTaskPriority,
       });
       setTasks((prev) => [
         { ...response.data, comments: response.data.comments ?? [] },
@@ -373,6 +377,7 @@ function App() {
       ]);
       setTitle("");
       setDescription("");
+      setNewTaskPriority("medium");
       setTaskModalOpen(false);
       message.success("Задача создана");
     } catch (error) {
@@ -539,6 +544,26 @@ function App() {
       message.error("Не удалось переместить задачу");
     } finally {
       setMovingTaskId(null);
+    }
+  };
+
+  const changePriority = async (taskId: number, priority: PriorityKey) => {
+    setUpdatingId(taskId);
+    try {
+      const response = await api.patch<Task>(`/tasks/${taskId}/priority`, { priority });
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.id === taskId
+            ? { ...response.data, comments: response.data.comments ?? [] }
+            : t,
+        ),
+      );
+      message.success("Приоритет обновлен");
+    } catch (error) {
+      console.error(error);
+      message.error("Не удалось обновить приоритет");
+    } finally {
+      setUpdatingId(null);
     }
   };
 
@@ -1035,6 +1060,12 @@ function App() {
               onSelectProject={handleProjectChange}
               onOpenCreateTask={() => setTaskModalOpen(true)}
               onGoToQuick={() => setActivePage("quick")}
+              prioritySort={prioritySort}
+              onTogglePrioritySort={() =>
+                setPrioritySort((prev) =>
+                  prev === null ? "asc" : prev === "asc" ? "desc" : null,
+                )
+              }
             />
 
             {projects.length === 0 && !loadingProjects ? (
@@ -1069,9 +1100,16 @@ function App() {
                 onMoveTask={(taskId, projectId) =>
                   void moveTask(taskId, projectId)
                 }
+                onChangePriority={(taskId, priority) =>
+                  void changePriority(taskId, priority)
+                }
               />
             ) : (
-              <Board groupedTasks={grouped} onSelectTask={openTaskDetails} />
+              <Board
+                groupedTasks={grouped}
+                onSelectTask={openTaskDetails}
+                prioritySort={prioritySort}
+              />
             )}
           </>
         )}
@@ -1107,12 +1145,17 @@ function App() {
         open={taskModalOpen}
         title={title}
         description={description}
+        priority={newTaskPriority}
         creating={creating}
         canCreate={!!selectedProject}
         onTitleChange={setTitle}
         onDescriptionChange={setDescription}
+        onPriorityChange={setNewTaskPriority}
         onCreate={handleCreate}
-        onClose={() => setTaskModalOpen(false)}
+        onClose={() => {
+          setTaskModalOpen(false);
+          setNewTaskPriority("medium");
+        }}
       />
       <PasswordModal
         user={passwordModalUser}

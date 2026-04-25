@@ -1,7 +1,7 @@
 import { Card, Empty, Space, Tag } from "antd";
 import type { MouseEvent } from "react";
 
-import { columnDescriptions, statusMeta } from "../../constants";
+import { columnDescriptions, priorityMeta, statusMeta } from "../../constants";
 import type { StatusKey, Task } from "../../types";
 import { formatAuthor, formatDate } from "../../utils/formatters";
 
@@ -48,13 +48,11 @@ function StatusColumn({ status, tasks, onSelectTask }: StatusColumnProps) {
             className="task-card"
             hoverable
             onClick={(e) => handleCardClick(e, task.id)}
-            extra={
-              <Tag color={statusMeta[task.status].color}>
-                {statusMeta[task.status].label}
-              </Tag>
-            }
           >
             <Space direction="vertical" size={2}>
+              <Tag color={priorityMeta[task.priority ?? "medium"].color} style={{ marginBottom: 2 }}>
+                {priorityMeta[task.priority ?? "medium"].label}
+              </Tag>
               <div className="meta-row">
                 <span className="meta-label">created</span>
                 <span className="meta-value">{formatDate(task.createdAt)}</span>
