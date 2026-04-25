@@ -45,6 +45,7 @@ type taskResponse struct {
 	ID          int64               `json:"id"`
 	Title       string              `json:"title"`
 	Status      string              `json:"status"`
+	Priority    string              `json:"priority"`
 	Description string              `json:"description"`
 	ProjectID   int64               `json:"projectId"`
 	CreatedAt   time.Time           `json:"createdAt"`
@@ -219,6 +220,15 @@ func (s *Server) handleTaskActions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.updateStatus(w, r, id)
+		return
+	}
+
+	if len(parts) == 2 && parts[1] == "priority" {
+		if r.Method != http.MethodPatch {
+			writeError(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		s.updatePriority(w, r, id)
 		return
 	}
 
@@ -578,6 +588,7 @@ func toTaskResponse(t store.Task, comments []store.TaskComment) taskResponse {
 		ID:          t.ID,
 		Title:       t.Title,
 		Status:      t.Status,
+		Priority:    t.Priority,
 		Description: t.Description,
 		ProjectID:   t.ProjectID,
 		CreatedAt:   t.CreatedAt,
@@ -644,6 +655,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		Title       string `json:"title"`
 		Description string `json:"description"`
 		ProjectID   int64  `json:"projectId"`
+		Priority    string `json:"priority"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		writeError(w, "invalid request body", http.StatusBadRequest)
@@ -667,7 +679,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	created, err := s.store.InsertTask(r.Context(), payload.Title, payload.Description, "", payload.ProjectID, auth.user.ID)
+	created, err := s.store.InsertTask(r.Context(), payload.Title, payload.Description, "", payload.ProjectID, auth.user.ID, payload.Priority)
 	if err != nil {
 		if strings.Contains(err.Error(), "project not found") {
 			writeError(w, "project not found", http.StatusBadRequest)
@@ -724,6 +736,49 @@ func (s *Server) updateStatus(w http.ResponseWriter, r *http.Request, id int64) 
 		return
 	}
 
+	writeJSON(w, toTaskResponse(updated, comments))
+}
+
+func (s *Server) updatePriority(w http.ResponseWriter, r *http.Request, id int64) {
+	auth := getAuth(r)
+	existing, err := s.store.GetTask(r.Context(), id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, "task not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		writeError(w, "failed to load task", http.StatusInternalServerError)
+		return
+	}
+	if auth.isRestricted && !auth.canAccess(existing.ProjectID) {
+		writeError(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	var payload struct {
+		Priority string `json:"priority"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	updated, err := s.store.SetTaskPriority(r.Context(), id, payload.Priority)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, "task not found", http.StatusNotFound)
+		return
+	}
+	if errors.Is(err, store.ErrInvalidPriority) {
+		writeError(w, "invalid priority", http.StatusBadRequest)
+		return
+	}
+	if err != nil {
+		writeError(w, "failed to update priority", http.StatusInternalServerError)
+		return
+	}
+	comments, err := s.store.ListTaskComments(r.Context(), id)
+	if err != nil {
+		writeError(w, "failed to load comments", http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, toTaskResponse(updated, comments))
 }
 

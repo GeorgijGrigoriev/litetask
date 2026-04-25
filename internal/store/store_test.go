@@ -88,7 +88,7 @@ func TestTaskCRUD(t *testing.T) {
 		t.Fatalf("create project: %v", err)
 	}
 
-	task, err := st.InsertTask(ctx, "Title", "Desc", "", p.ID, u.ID)
+	task, err := st.InsertTask(ctx, "Title", "Desc", "", p.ID, u.ID, "medium")
 	if err != nil {
 		t.Fatalf("insert task: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestTaskComments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create project: %v", err)
 	}
-	task, err := st.InsertTask(ctx, "Title", "", "", p.ID, u.ID)
+	task, err := st.InsertTask(ctx, "Title", "", "", p.ID, u.ID, "medium")
 	if err != nil {
 		t.Fatalf("insert task: %v", err)
 	}
@@ -328,7 +328,7 @@ func TestDeleteProjectWithTasks(t *testing.T) {
 	u := createUser(t, st, "user6@example.com")
 
 	p, _ := st.CreateProject(ctx, "WithTasks")
-	_, _ = st.InsertTask(ctx, "Task", "", "", p.ID, u.ID)
+	_, _ = st.InsertTask(ctx, "Task", "", "", p.ID, u.ID, "medium")
 
 	if err := st.DeleteProject(ctx, p.ID); err != nil {
 		t.Fatalf("delete project with tasks: %v", err)
@@ -395,7 +395,7 @@ func TestMoveTask(t *testing.T) {
 		t.Fatalf("create project B: %v", err)
 	}
 
-	task, err := st.InsertTask(ctx, "Task", "", "", p1.ID, u.ID)
+	task, err := st.InsertTask(ctx, "Task", "", "", p1.ID, u.ID, "medium")
 	if err != nil {
 		t.Fatalf("insert task: %v", err)
 	}
@@ -429,10 +429,10 @@ func TestFetchTasksAllowedFilter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create project: %v", err)
 	}
-	if _, err := st.InsertTask(ctx, "Task 1", "", "", p1.ID, u.ID); err != nil {
+	if _, err := st.InsertTask(ctx, "Task 1", "", "", p1.ID, u.ID, "medium"); err != nil {
 		t.Fatalf("insert task: %v", err)
 	}
-	if _, err := st.InsertTask(ctx, "Task 2", "", "", p2.ID, u.ID); err != nil {
+	if _, err := st.InsertTask(ctx, "Task 2", "", "", p2.ID, u.ID, "medium"); err != nil {
 		t.Fatalf("insert task: %v", err)
 	}
 

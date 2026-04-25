@@ -43,16 +43,24 @@ var (
 		"done":        "Готова",
 	}
 	ErrInvalidStatus    = errors.New("invalid status")
+	ErrInvalidPriority  = errors.New("invalid priority")
 	ErrInvalidRole      = errors.New("invalid role")
 	ErrLastAdmin        = errors.New("cannot remove last admin")
 	ErrUsernameSet      = errors.New("username already set")
 	ErrProtectedProject = errors.New("cannot delete protected project")
 )
 
+var allowedPriorities = map[string]struct{}{
+	"high":   {},
+	"medium": {},
+	"low":    {},
+}
+
 type Task struct {
 	ID          int64     `json:"id"`
 	Title       string    `json:"title"`
 	Status      string    `json:"status"`
+	Priority    string    `json:"priority"`
 	Description string    `json:"description"`
 	ProjectID   int64     `json:"projectId"`
 	CreatedAt   time.Time `json:"createdAt"`
@@ -124,7 +132,7 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-func (s *Store) InsertTask(ctx context.Context, title, description, authorLabel string, projectID, createdBy int64) (Task, error) {
+func (s *Store) InsertTask(ctx context.Context, title, description, authorLabel string, projectID, createdBy int64, priority string) (Task, error) {
 	var t Task
 	ok, err := s.ProjectExists(ctx, projectID)
 	if err != nil {
@@ -133,10 +141,14 @@ func (s *Store) InsertTask(ctx context.Context, title, description, authorLabel 
 	if !ok {
 		return t, fmt.Errorf("project not found")
 	}
+	if _, ok := allowedPriorities[priority]; !ok {
+		priority = "medium"
+	}
 
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO tasks (title, status, description, author_label, project_id, created_by) VALUES (?, 'new', ?, ?, ?, ?)`,
+		`INSERT INTO tasks (title, status, priority, description, author_label, project_id, created_by) VALUES (?, 'new', ?, ?, ?, ?, ?)`,
 		title,
+		priority,
 		description,
 		sql.NullString{String: authorLabel, Valid: authorLabel != ""},
 		projectID,
@@ -168,6 +180,24 @@ func (s *Store) SetTaskStatus(ctx context.Context, id int64, status string) (Tas
 	}
 	if affected == 0 {
 		return t, sql.ErrNoRows
+	}
+	return s.scanTask(ctx, id)
+}
+
+func (s *Store) SetTaskPriority(ctx context.Context, id int64, priority string) (Task, error) {
+	if _, ok := allowedPriorities[priority]; !ok {
+		return Task{}, ErrInvalidPriority
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE tasks SET priority = ? WHERE id = ?`, priority, id)
+	if err != nil {
+		return Task{}, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return Task{}, fmt.Errorf("rowsAffected: %w", err)
+	}
+	if affected == 0 {
+		return Task{}, sql.ErrNoRows
 	}
 	return s.scanTask(ctx, id)
 }
@@ -241,12 +271,12 @@ func (s *Store) scanTask(ctx context.Context, id int64) (Task, error) {
 	var created sql.NullInt64
 	var email, first, last sql.NullString
 	err := s.db.QueryRowContext(ctx,
-		`SELECT t.id, t.title, t.status, COALESCE(t.description, t.comment, ''), t.project_id, t.created_at, t.created_by, COALESCE(t.author_label, u.email, ''), u.first_name, u.last_name
+		`SELECT t.id, t.title, t.status, t.priority, COALESCE(t.description, t.comment, ''), t.project_id, t.created_at, t.created_by, COALESCE(t.author_label, u.email, ''), u.first_name, u.last_name
 			FROM tasks t
 			LEFT JOIN users u ON t.created_by = u.id
 			WHERE t.id = ?`,
 		id,
-	).Scan(&t.ID, &t.Title, &t.Status, &t.Description, &t.ProjectID, &t.CreatedAt, &created, &email, &first, &last)
+	).Scan(&t.ID, &t.Title, &t.Status, &t.Priority, &t.Description, &t.ProjectID, &t.CreatedAt, &created, &email, &first, &last)
 	if err != nil {
 		return t, err
 	}
@@ -654,7 +684,7 @@ func (s *Store) projectExistsTx(ctx context.Context, tx *sql.Tx, id int64) (bool
 }
 
 func (s *Store) FetchTasks(ctx context.Context, projectID int64, status string, allowed map[int64]struct{}) ([]Task, error) {
-	query := `SELECT t.id, t.title, t.status, COALESCE(t.description, t.comment, ''), t.project_id, t.created_at, t.created_by, COALESCE(t.author_label, u.email, ''), u.first_name, u.last_name FROM tasks t LEFT JOIN users u ON t.created_by = u.id`
+	query := `SELECT t.id, t.title, t.status, t.priority, COALESCE(t.description, t.comment, ''), t.project_id, t.created_at, t.created_by, COALESCE(t.author_label, u.email, ''), u.first_name, u.last_name FROM tasks t LEFT JOIN users u ON t.created_by = u.id`
 	conds := make([]string, 0)
 	args := make([]any, 0)
 
@@ -691,7 +721,7 @@ func (s *Store) FetchTasks(ctx context.Context, projectID int64, status string, 
 		var created time.Time
 		var authorID sql.NullInt64
 		var email, first, last sql.NullString
-		if err := rows.Scan(&t.ID, &t.Title, &t.Status, &t.Description, &t.ProjectID, &created, &authorID, &email, &first, &last); err != nil {
+		if err := rows.Scan(&t.ID, &t.Title, &t.Status, &t.Priority, &t.Description, &t.ProjectID, &created, &authorID, &email, &first, &last); err != nil {
 			return nil, err
 		}
 		t.CreatedAt = created.UTC()
@@ -912,6 +942,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	title TEXT NOT NULL,
 	status TEXT NOT NULL,
+	priority TEXT NOT NULL DEFAULT 'medium',
 	comment TEXT DEFAULT '',
 	description TEXT DEFAULT '',
 	project_id INTEGER NOT NULL DEFAULT 1,
@@ -1022,6 +1053,12 @@ CREATE TABLE IF NOT EXISTS user_projects (
 	if _, err := db.Exec(`ALTER TABLE projects ADD COLUMN owner_id INTEGER`); err != nil {
 		if !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
 			log.Printf("warning: unable to add owner_id column to projects: %v", err)
+		}
+	}
+
+	if _, err := db.Exec(`ALTER TABLE tasks ADD COLUMN priority TEXT NOT NULL DEFAULT 'medium'`); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+			log.Printf("warning: unable to add priority column to tasks: %v", err)
 		}
 	}
 

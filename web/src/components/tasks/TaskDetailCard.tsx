@@ -8,8 +8,8 @@ import {
 import { Button, Card, Input, Popconfirm, Select, Space, Tag } from "antd";
 import { useState } from "react";
 
-import { statusMeta, statusOrder } from "../../constants";
-import type { Project, StatusKey, Task, User } from "../../types";
+import { priorityMeta, priorityOrder, statusMeta, statusOrder } from "../../constants";
+import type { PriorityKey, Project, StatusKey, Task, User } from "../../types";
 import { formatAuthor, formatDate } from "../../utils/formatters";
 
 type TaskDetailCardProps = {
@@ -35,6 +35,7 @@ type TaskDetailCardProps = {
   projects: Project[];
   movingTaskId: number | null;
   onMoveTask: (taskId: number, targetProjectId: number) => void;
+  onChangePriority: (taskId: number, priority: PriorityKey) => void;
 };
 
 function TaskDetailCard({
@@ -60,6 +61,7 @@ function TaskDetailCard({
   projects,
   movingTaskId,
   onMoveTask,
+  onChangePriority,
 }: TaskDetailCardProps) {
   const [pendingProjectId, setPendingProjectId] = useState<number | null>(null);
   const pendingProject = projects.find((p) => p.id === pendingProjectId);
@@ -97,6 +99,20 @@ function TaskDetailCard({
               )
             }
             style={{ minWidth: 180 }}
+          />
+          <Tag color={priorityMeta[task.priority ?? "medium"].color}>
+            {priorityMeta[task.priority ?? "medium"].label}
+          </Tag>
+          <Select
+            size="small"
+            value={task.priority ?? "medium"}
+            onChange={(value) => onChangePriority(task.id, value as PriorityKey)}
+            dropdownMatchSelectWidth={false}
+            options={priorityOrder.map((p) => ({
+              label: priorityMeta[p].label,
+              value: p,
+            }))}
+            style={{ minWidth: 130 }}
           />
           <Popconfirm
             title={`Переместить в «${pendingProjectName}»?`}
