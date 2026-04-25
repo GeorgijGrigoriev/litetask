@@ -11,6 +11,7 @@ type Storer interface {
 	SetTaskStatus(ctx context.Context, id int64, status string) (Task, error)
 	SetTaskDescription(ctx context.Context, id int64, description string) (Task, error)
 	DeleteTask(ctx context.Context, id int64) error
+	MoveTask(ctx context.Context, taskID, newProjectID int64) (Task, error)
 	FetchTasks(ctx context.Context, projectID int64, status string, allowed map[int64]struct{}) ([]Task, error)
 
 	CreateProject(ctx context.Context, name string) (Project, error)

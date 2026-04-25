@@ -1,13 +1,15 @@
 import {
   ArrowLeftOutlined,
   DeleteOutlined,
+  FolderOpenOutlined,
   HighlightOutlined,
   LoadingOutlined,
 } from "@ant-design/icons";
 import { Button, Card, Input, Popconfirm, Select, Space, Tag } from "antd";
+import { useState } from "react";
 
 import { statusMeta, statusOrder } from "../../constants";
-import type { StatusKey, Task, User } from "../../types";
+import type { Project, StatusKey, Task, User } from "../../types";
 import { formatAuthor, formatDate } from "../../utils/formatters";
 
 type TaskDetailCardProps = {
@@ -30,6 +32,9 @@ type TaskDetailCardProps = {
   onCommentDraftChange: (value: string) => void;
   onAddComment: () => void;
   onDeleteComment: (commentId: number) => void;
+  projects: Project[];
+  movingTaskId: number | null;
+  onMoveTask: (taskId: number, targetProjectId: number) => void;
 };
 
 function TaskDetailCard({
@@ -52,7 +57,13 @@ function TaskDetailCard({
   onCommentDraftChange,
   onAddComment,
   onDeleteComment,
+  projects,
+  movingTaskId,
+  onMoveTask,
 }: TaskDetailCardProps) {
+  const [pendingProjectId, setPendingProjectId] = useState<number | null>(null);
+  const pendingProject = projects.find((p) => p.id === pendingProjectId);
+  const pendingProjectName = pendingProject?.isInbox ? "Входящие" : pendingProject?.name;
   return (
     <Card
       className="task-details-card"
@@ -87,6 +98,33 @@ function TaskDetailCard({
             }
             style={{ minWidth: 180 }}
           />
+          <Popconfirm
+            title={`Переместить в «${pendingProjectName}»?`}
+            open={pendingProjectId !== null}
+            onConfirm={() => {
+              if (pendingProjectId !== null) onMoveTask(task.id, pendingProjectId);
+              setPendingProjectId(null);
+            }}
+            onCancel={() => setPendingProjectId(null)}
+          >
+            <Select
+              size="small"
+              placeholder="Переместить в…"
+              value={null}
+              onChange={(value: number) => setPendingProjectId(value)}
+              loading={movingTaskId === task.id}
+              disabled={
+                movingTaskId === task.id ||
+                projects.filter((p) => p.id !== task.projectId).length === 0
+              }
+              dropdownMatchSelectWidth={false}
+              style={{ minWidth: 160 }}
+              suffixIcon={<FolderOpenOutlined />}
+              options={projects
+                .filter((p) => p.id !== task.projectId)
+                .map((p) => ({ label: p.isInbox ? "Входящие" : p.name, value: p.id }))}
+            />
+          </Popconfirm>
           <Popconfirm
             title="Удалить задачу?"
             onConfirm={() => onDeleteTask(task.id)}

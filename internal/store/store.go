@@ -188,6 +188,28 @@ func (s *Store) SetTaskDescription(ctx context.Context, id int64, description st
 	return s.scanTask(ctx, id)
 }
 
+func (s *Store) MoveTask(ctx context.Context, taskID, newProjectID int64) (Task, error) {
+	ok, err := s.ProjectExists(ctx, newProjectID)
+	if err != nil {
+		return Task{}, err
+	}
+	if !ok {
+		return Task{}, fmt.Errorf("project not found")
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE tasks SET project_id = ? WHERE id = ?`, newProjectID, taskID)
+	if err != nil {
+		return Task{}, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return Task{}, fmt.Errorf("rowsAffected: %w", err)
+	}
+	if affected == 0 {
+		return Task{}, sql.ErrNoRows
+	}
+	return s.scanTask(ctx, taskID)
+}
+
 func (s *Store) DeleteTask(ctx context.Context, id int64) error {
 	res, err := s.db.ExecContext(ctx, `DELETE FROM tasks WHERE id = ?`, id)
 	if err != nil {

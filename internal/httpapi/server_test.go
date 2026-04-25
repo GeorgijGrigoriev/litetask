@@ -3,7 +3,9 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"litetask/internal/store"
 )
@@ -1292,5 +1295,164 @@ func TestRestrictedUserCanCreateAndAccessOwnProject(t *testing.T) {
 		"/api/tasks?projectId="+strconv.FormatInt(p.ID, 10), "", userCookie)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+}
+
+// ── Move task ─────────────────────────────────────────────────────────────────
+
+func TestMoveTaskSuccess(t *testing.T) {
+	srv, st := newTestServer(t)
+	ctx := context.Background()
+	adminCookie := mustLogin(t, srv, "admin@example.com", "secret123")
+
+	p1, _ := st.CreateProject(ctx, "Source")
+	p2, _ := st.CreateProject(ctx, "Target")
+
+	taskResp := doRequest(t, srv, http.MethodPost, "/api/tasks",
+		jsonBody(map[string]any{"title": "Task", "projectId": p1.ID}), adminCookie)
+	var task taskResponse
+	decodeJSON(t, taskResp, &task)
+
+	resp := doRequest(t, srv, http.MethodPatch,
+		"/api/tasks/"+strconv.FormatInt(task.ID, 10)+"/project",
+		jsonBody(map[string]any{"projectId": p2.ID}), adminCookie)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var moved taskResponse
+	decodeJSON(t, resp, &moved)
+	if moved.ProjectID != p2.ID {
+		t.Fatalf("expected projectId %d, got %d", p2.ID, moved.ProjectID)
+	}
+}
+
+func TestMoveTaskUnauthorized(t *testing.T) {
+	srv, st := newTestServer(t)
+	ctx := context.Background()
+	adminCookie := mustLogin(t, srv, "admin@example.com", "secret123")
+
+	p, _ := st.CreateProject(ctx, "Project")
+	taskResp := doRequest(t, srv, http.MethodPost, "/api/tasks",
+		jsonBody(map[string]any{"title": "Task", "projectId": p.ID}), adminCookie)
+	var task taskResponse
+	decodeJSON(t, taskResp, &task)
+
+	resp := doRequest(t, srv, http.MethodPatch,
+		"/api/tasks/"+strconv.FormatInt(task.ID, 10)+"/project",
+		jsonBody(map[string]any{"projectId": p.ID}), nil)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", resp.StatusCode)
+	}
+}
+
+func TestMoveTaskTaskNotFound(t *testing.T) {
+	srv, st := newTestServer(t)
+	ctx := context.Background()
+	adminCookie := mustLogin(t, srv, "admin@example.com", "secret123")
+
+	p, _ := st.CreateProject(ctx, "Project")
+
+	resp := doRequest(t, srv, http.MethodPatch, "/api/tasks/99999/project",
+		jsonBody(map[string]any{"projectId": p.ID}), adminCookie)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestMoveTaskTargetProjectNotFound(t *testing.T) {
+	srv, st := newTestServer(t)
+	ctx := context.Background()
+	adminCookie := mustLogin(t, srv, "admin@example.com", "secret123")
+
+	p, _ := st.CreateProject(ctx, "Source")
+	taskResp := doRequest(t, srv, http.MethodPost, "/api/tasks",
+		jsonBody(map[string]any{"title": "Task", "projectId": p.ID}), adminCookie)
+	var task taskResponse
+	decodeJSON(t, taskResp, &task)
+
+	resp := doRequest(t, srv, http.MethodPatch,
+		"/api/tasks/"+strconv.FormatInt(task.ID, 10)+"/project",
+		jsonBody(map[string]any{"projectId": 99999}), adminCookie)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestMoveTaskForbiddenSourceProject(t *testing.T) {
+	srv, st := newTestServer(t)
+	ctx := context.Background()
+	adminCookie := mustLogin(t, srv, "admin@example.com", "secret123")
+	u, _ := st.CreateUser(ctx, "restricted@example.com", "", "pass123", "user", "", "")
+	userCookie := mustLogin(t, srv, "restricted@example.com", "pass123")
+
+	src, _ := st.CreateProject(ctx, "Source")
+	dst, _ := st.CreateProject(ctx, "Target")
+	// grant access to target but NOT source
+	_ = st.SetUserProjects(ctx, u.ID, []int64{dst.ID})
+
+	taskResp := doRequest(t, srv, http.MethodPost, "/api/tasks",
+		jsonBody(map[string]any{"title": "Task", "projectId": src.ID}), adminCookie)
+	var task taskResponse
+	decodeJSON(t, taskResp, &task)
+
+	resp := doRequest(t, srv, http.MethodPatch,
+		"/api/tasks/"+strconv.FormatInt(task.ID, 10)+"/project",
+		jsonBody(map[string]any{"projectId": dst.ID}), userCookie)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", resp.StatusCode)
+	}
+}
+
+func TestMoveTaskForbiddenTargetProject(t *testing.T) {
+	srv, st := newTestServer(t)
+	ctx := context.Background()
+	adminCookie := mustLogin(t, srv, "admin@example.com", "secret123")
+	u, _ := st.CreateUser(ctx, "restricted2@example.com", "", "pass123", "user", "", "")
+	userCookie := mustLogin(t, srv, "restricted2@example.com", "pass123")
+
+	src, _ := st.CreateProject(ctx, "Source")
+	dst, _ := st.CreateProject(ctx, "Target")
+	// grant access to source but NOT target
+	_ = st.SetUserProjects(ctx, u.ID, []int64{src.ID})
+
+	taskResp := doRequest(t, srv, http.MethodPost, "/api/tasks",
+		jsonBody(map[string]any{"title": "Task", "projectId": src.ID}), adminCookie)
+	var task taskResponse
+	decodeJSON(t, taskResp, &task)
+
+	resp := doRequest(t, srv, http.MethodPatch,
+		"/api/tasks/"+strconv.FormatInt(task.ID, 10)+"/project",
+		jsonBody(map[string]any{"projectId": dst.ID}), userCookie)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", resp.StatusCode)
+	}
+}
+
+// ── Token expiry ──────────────────────────────────────────────────────────────
+
+func TestExpiredToken(t *testing.T) {
+	exp := time.Now().Add(-time.Hour).Unix()
+	payload := fmt.Sprintf("1:admin:%d", exp)
+	sig := sign(testSecret, payload)
+	token := base64.RawStdEncoding.EncodeToString([]byte(payload)) + "." + sig
+	if _, err := parseToken(token, testSecret); err == nil {
+		t.Fatal("expected error for expired token")
+	}
+}
+
+func TestExpiredTokenCookieReturns401(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	exp := time.Now().Add(-time.Hour).Unix()
+	payload := fmt.Sprintf("1:admin:%d", exp)
+	sig := sign(testSecret, payload)
+	token := base64.RawStdEncoding.EncodeToString([]byte(payload)) + "." + sig
+
+	resp := doRequest(t, srv, http.MethodGet, "/api/auth/me", "", &http.Cookie{
+		Name:  "auth",
+		Value: token,
+	})
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for expired token, got %d", resp.StatusCode)
 	}
 }
