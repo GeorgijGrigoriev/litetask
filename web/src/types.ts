@@ -42,3 +42,10 @@ export type User = {
 };
 
 export type AutoRefreshIntervalMs = 5000 | 30000 | 60000 | 300000;
+
+export type GitHubIntegration = {
+  id: number;
+  repoFullName: string;
+  projectId: number;
+  lastSyncedAt: string | null;
+};

@@ -50,16 +50,29 @@ var (
 )
 
 type Task struct {
-	ID          int64     `json:"id"`
-	Title       string    `json:"title"`
-	Status      string    `json:"status"`
-	Description string    `json:"description"`
-	ProjectID   int64     `json:"projectId"`
-	CreatedAt   time.Time `json:"createdAt"`
-	CreatedBy   int64     `json:"createdBy"`
-	AuthorEmail string    `json:"authorEmail"`
-	AuthorFirst string    `json:"authorFirstName,omitempty"`
-	AuthorLast  string    `json:"authorLastName,omitempty"`
+	ID             int64     `json:"id"`
+	Title          string    `json:"title"`
+	Status         string    `json:"status"`
+	Description    string    `json:"description"`
+	ProjectID      int64     `json:"projectId"`
+	CreatedAt      time.Time `json:"createdAt"`
+	CreatedBy      int64     `json:"createdBy"`
+	AuthorEmail    string    `json:"authorEmail"`
+	AuthorFirst    string    `json:"authorFirstName,omitempty"`
+	AuthorLast     string    `json:"authorLastName,omitempty"`
+	ExternalID     string    `json:"externalId,omitempty"`
+	ExternalSource string    `json:"externalSource,omitempty"`
+	ExternalURL    string    `json:"externalUrl,omitempty"`
+}
+
+type GitHubIntegration struct {
+	ID           int64      `json:"id"`
+	UserID       int64      `json:"userId"`
+	RepoFullName string     `json:"repoFullName"`
+	ProjectID    int64      `json:"projectId"`
+	AccessToken  string     `json:"-"`
+	LastSyncedAt *time.Time `json:"lastSyncedAt"`
+	CreatedAt    time.Time  `json:"createdAt"`
 }
 
 type TaskComment struct {
@@ -219,12 +232,12 @@ func (s *Store) scanTask(ctx context.Context, id int64) (Task, error) {
 	var created sql.NullInt64
 	var email, first, last sql.NullString
 	err := s.db.QueryRowContext(ctx,
-		`SELECT t.id, t.title, t.status, COALESCE(t.description, t.comment, ''), t.project_id, t.created_at, t.created_by, COALESCE(t.author_label, u.email, ''), u.first_name, u.last_name
+		`SELECT t.id, t.title, t.status, COALESCE(t.description, t.comment, ''), t.project_id, t.created_at, t.created_by, COALESCE(t.author_label, u.email, ''), u.first_name, u.last_name, COALESCE(t.external_id,''), COALESCE(t.external_source,''), COALESCE(t.external_url,'')
 			FROM tasks t
 			LEFT JOIN users u ON t.created_by = u.id
 			WHERE t.id = ?`,
 		id,
-	).Scan(&t.ID, &t.Title, &t.Status, &t.Description, &t.ProjectID, &t.CreatedAt, &created, &email, &first, &last)
+	).Scan(&t.ID, &t.Title, &t.Status, &t.Description, &t.ProjectID, &t.CreatedAt, &created, &email, &first, &last, &t.ExternalID, &t.ExternalSource, &t.ExternalURL)
 	if err != nil {
 		return t, err
 	}
@@ -632,7 +645,7 @@ func (s *Store) projectExistsTx(ctx context.Context, tx *sql.Tx, id int64) (bool
 }
 
 func (s *Store) FetchTasks(ctx context.Context, projectID int64, status string, allowed map[int64]struct{}) ([]Task, error) {
-	query := `SELECT t.id, t.title, t.status, COALESCE(t.description, t.comment, ''), t.project_id, t.created_at, t.created_by, COALESCE(t.author_label, u.email, ''), u.first_name, u.last_name FROM tasks t LEFT JOIN users u ON t.created_by = u.id`
+	query := `SELECT t.id, t.title, t.status, COALESCE(t.description, t.comment, ''), t.project_id, t.created_at, t.created_by, COALESCE(t.author_label, u.email, ''), u.first_name, u.last_name, COALESCE(t.external_id,''), COALESCE(t.external_source,''), COALESCE(t.external_url,'') FROM tasks t LEFT JOIN users u ON t.created_by = u.id`
 	conds := make([]string, 0)
 	args := make([]any, 0)
 
@@ -669,7 +682,7 @@ func (s *Store) FetchTasks(ctx context.Context, projectID int64, status string, 
 		var created time.Time
 		var authorID sql.NullInt64
 		var email, first, last sql.NullString
-		if err := rows.Scan(&t.ID, &t.Title, &t.Status, &t.Description, &t.ProjectID, &created, &authorID, &email, &first, &last); err != nil {
+		if err := rows.Scan(&t.ID, &t.Title, &t.Status, &t.Description, &t.ProjectID, &created, &authorID, &email, &first, &last, &t.ExternalID, &t.ExternalSource, &t.ExternalURL); err != nil {
 			return nil, err
 		}
 		t.CreatedAt = created.UTC()
@@ -1003,6 +1016,41 @@ CREATE TABLE IF NOT EXISTS user_projects (
 		}
 	}
 
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS github_integrations (
+		id             INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id        INTEGER NOT NULL REFERENCES users(id),
+		repo_full_name TEXT NOT NULL,
+		project_id     INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+		access_token   TEXT NOT NULL,
+		last_synced_at DATETIME,
+		created_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE(project_id)
+	)`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS github_tokens (
+		user_id         INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+		encrypted_token TEXT NOT NULL,
+		updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+	)`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`ALTER TABLE tasks ADD COLUMN external_id TEXT`); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+			log.Printf("warning: unable to add external_id column: %v", err)
+		}
+	}
+	if _, err := db.Exec(`ALTER TABLE tasks ADD COLUMN external_source TEXT`); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+			log.Printf("warning: unable to add external_source column: %v", err)
+		}
+	}
+	if _, err := db.Exec(`ALTER TABLE tasks ADD COLUMN external_url TEXT`); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+			log.Printf("warning: unable to add external_url column: %v", err)
+		}
+	}
+
 	return nil
 }
 
@@ -1082,6 +1130,200 @@ func ensureAdminUser(db *sql.DB) error {
 		}
 	}
 	return nil
+}
+
+func (s *Store) SetTaskTitle(ctx context.Context, id int64, title string) (Task, error) {
+	var t Task
+	res, err := s.db.ExecContext(ctx, `UPDATE tasks SET title = ? WHERE id = ?`, title, id)
+	if err != nil {
+		return t, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return t, fmt.Errorf("rowsAffected: %w", err)
+	}
+	if affected == 0 {
+		return t, sql.ErrNoRows
+	}
+	return s.scanTask(ctx, id)
+}
+
+func (s *Store) GetTaskByExternalID(ctx context.Context, externalID, source string, projectID int64) (Task, error) {
+	var id int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id FROM tasks WHERE external_id = ? AND external_source = ? AND project_id = ?`,
+		externalID, source, projectID,
+	).Scan(&id)
+	if err != nil {
+		return Task{}, err
+	}
+	return s.scanTask(ctx, id)
+}
+
+func (s *Store) SetTaskExternal(ctx context.Context, taskID int64, externalID, source, url string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE tasks SET external_id = ?, external_source = ?, external_url = ? WHERE id = ?`,
+		externalID, source, url, taskID,
+	)
+	return err
+}
+
+func (s *Store) ListTasksWithExternalSource(ctx context.Context, projectID int64, source string) ([]Task, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT t.id, t.title, t.status, COALESCE(t.description, t.comment, ''), t.project_id, t.created_at, t.created_by, COALESCE(t.author_label, u.email, ''), u.first_name, u.last_name, COALESCE(t.external_id,''), COALESCE(t.external_source,''), COALESCE(t.external_url,'')
+		FROM tasks t
+		LEFT JOIN users u ON t.created_by = u.id
+		WHERE t.project_id = ? AND t.external_source = ?
+		ORDER BY t.created_at DESC`,
+		projectID, source,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	var tasks []Task
+	for rows.Next() {
+		var t Task
+		var created time.Time
+		var authorID sql.NullInt64
+		var email, first, last sql.NullString
+		if err := rows.Scan(
+			&t.ID, &t.Title, &t.Status, &t.Description, &t.ProjectID, &created, &authorID, &email, &first, &last,
+			&t.ExternalID, &t.ExternalSource, &t.ExternalURL,
+		); err != nil {
+			return nil, err
+		}
+		t.CreatedAt = created.UTC()
+		if authorID.Valid {
+			t.CreatedBy = authorID.Int64
+		}
+		if email.Valid {
+			t.AuthorEmail = email.String
+		}
+		if first.Valid {
+			t.AuthorFirst = first.String
+		}
+		if last.Valid {
+			t.AuthorLast = last.String
+		}
+		tasks = append(tasks, t)
+	}
+	return tasks, nil
+}
+
+func (s *Store) CreateGitHubIntegration(ctx context.Context, userID int64, repo string, projectID int64, encryptedToken string) (GitHubIntegration, error) {
+	res, err := s.db.ExecContext(ctx,
+		`INSERT INTO github_integrations (user_id, repo_full_name, project_id, access_token) VALUES (?, ?, ?, ?)`,
+		userID, repo, projectID, encryptedToken,
+	)
+	if err != nil {
+		return GitHubIntegration{}, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return GitHubIntegration{}, fmt.Errorf("lastInsertId: %w", err)
+	}
+	return s.GetGitHubIntegrationByID(ctx, id)
+}
+
+func (s *Store) GetGitHubIntegrationByID(ctx context.Context, id int64) (GitHubIntegration, error) {
+	var ig GitHubIntegration
+	var lastSynced sql.NullTime
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, user_id, repo_full_name, project_id, access_token, last_synced_at, created_at FROM github_integrations WHERE id = ?`,
+		id,
+	).Scan(&ig.ID, &ig.UserID, &ig.RepoFullName, &ig.ProjectID, &ig.AccessToken, &lastSynced, &ig.CreatedAt)
+	if err != nil {
+		return ig, err
+	}
+	ig.CreatedAt = ig.CreatedAt.UTC()
+	if lastSynced.Valid {
+		t := lastSynced.Time.UTC()
+		ig.LastSyncedAt = &t
+	}
+	return ig, nil
+}
+
+func (s *Store) GetGitHubIntegrationByProject(ctx context.Context, projectID int64) (GitHubIntegration, error) {
+	var ig GitHubIntegration
+	var lastSynced sql.NullTime
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, user_id, repo_full_name, project_id, access_token, last_synced_at, created_at FROM github_integrations WHERE project_id = ?`,
+		projectID,
+	).Scan(&ig.ID, &ig.UserID, &ig.RepoFullName, &ig.ProjectID, &ig.AccessToken, &lastSynced, &ig.CreatedAt)
+	if err != nil {
+		return ig, err
+	}
+	ig.CreatedAt = ig.CreatedAt.UTC()
+	if lastSynced.Valid {
+		t := lastSynced.Time.UTC()
+		ig.LastSyncedAt = &t
+	}
+	return ig, nil
+}
+
+func (s *Store) ListGitHubIntegrations(ctx context.Context, userID int64) ([]GitHubIntegration, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, user_id, repo_full_name, project_id, access_token, last_synced_at, created_at FROM github_integrations WHERE user_id = ? ORDER BY created_at DESC`,
+		userID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	var igs []GitHubIntegration
+	for rows.Next() {
+		var ig GitHubIntegration
+		var lastSynced sql.NullTime
+		if err := rows.Scan(&ig.ID, &ig.UserID, &ig.RepoFullName, &ig.ProjectID, &ig.AccessToken, &lastSynced, &ig.CreatedAt); err != nil {
+			return nil, err
+		}
+		ig.CreatedAt = ig.CreatedAt.UTC()
+		if lastSynced.Valid {
+			t := lastSynced.Time.UTC()
+			ig.LastSyncedAt = &t
+		}
+		igs = append(igs, ig)
+	}
+	return igs, nil
+}
+
+func (s *Store) DeleteGitHubIntegration(ctx context.Context, id int64) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM github_integrations WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rowsAffected: %w", err)
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) UpdateGitHubIntegrationSyncedAt(ctx context.Context, id int64, t time.Time) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE github_integrations SET last_synced_at = ? WHERE id = ?`,
+		t.UTC(), id,
+	)
+	return err
+}
+
+func (s *Store) StoreGitHubToken(ctx context.Context, userID int64, encryptedToken string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO github_tokens (user_id, encrypted_token, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(user_id) DO UPDATE SET encrypted_token=excluded.encrypted_token, updated_at=CURRENT_TIMESTAMP`,
+		userID, encryptedToken,
+	)
+	return err
+}
+
+func (s *Store) GetGitHubToken(ctx context.Context, userID int64) (string, error) {
+	var token string
+	err := s.db.QueryRowContext(ctx, `SELECT encrypted_token FROM github_tokens WHERE user_id = ?`, userID).Scan(&token)
+	return token, err
 }
 
 func randomPassword() string {

@@ -35,10 +35,12 @@ type authUser struct {
 }
 
 type Server struct {
-	store             store.Storer
-	authSecret        []byte
-	allowRegistration bool
-	staticDir         string
+	store                store.Storer
+	authSecret           []byte
+	allowRegistration    bool
+	staticDir            string
+	githubClientID       string
+	githubClientSecret   string
 }
 
 type taskResponse struct {
@@ -99,12 +101,14 @@ func userToMe(u store.User) meResponse {
 	}
 }
 
-func New(s store.Storer, secret []byte, allowRegistration bool, staticDir string) *Server {
+func New(s store.Storer, secret []byte, allowRegistration bool, staticDir string, githubClientID, githubClientSecret string) *Server {
 	return &Server{
-		store:             s,
-		authSecret:        secret,
-		allowRegistration: allowRegistration,
-		staticDir:         staticDir,
+		store:              s,
+		authSecret:         secret,
+		allowRegistration:  allowRegistration,
+		staticDir:          staticDir,
+		githubClientID:     githubClientID,
+		githubClientSecret: githubClientSecret,
 	}
 }
 
@@ -118,6 +122,8 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/api/users", s.cors(s.requireAdmin(http.HandlerFunc(s.handleUsers))))
 	mux.Handle("/api/users/", s.cors(s.requireAdmin(http.HandlerFunc(s.handleUserActions))))
 	mux.Handle("/api/profile", s.cors(s.requireUser(http.HandlerFunc(s.handleProfile))))
+	mux.Handle("/api/github/callback", s.cors(http.HandlerFunc(s.handleGitHubCallback)))
+	mux.Handle("/api/github/", s.cors(s.requireUser(http.HandlerFunc(s.handleGitHub))))
 	mux.Handle("/", s.staticHandler())
 	return mux
 }
