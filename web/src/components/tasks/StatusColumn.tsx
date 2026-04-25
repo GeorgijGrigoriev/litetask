@@ -2,6 +2,7 @@ import { Card, Empty, Space, Tag } from "antd";
 import type { MouseEvent } from "react";
 
 import { columnDescriptions, priorityMeta, statusMeta } from "../../constants";
+import { useTranslation } from "../../i18n";
 import type { StatusKey, Task } from "../../types";
 import { formatAuthor, formatDate } from "../../utils/formatters";
 
@@ -12,6 +13,8 @@ type StatusColumnProps = {
 };
 
 function StatusColumn({ status, tasks, onSelectTask }: StatusColumnProps) {
+  const { t } = useTranslation();
+
   const handleCardClick = (event: MouseEvent<HTMLElement>, taskId: number) => {
     const target = event.target as HTMLElement | null;
     if (target && target.closest(".card-interactive")) {
@@ -26,17 +29,17 @@ function StatusColumn({ status, tasks, onSelectTask }: StatusColumnProps) {
       title={
         <Space size="small">
           {statusMeta[status].icon}
-          <span>{statusMeta[status].label}</span>
+          <span>{t(statusMeta[status].label)}</span>
           <Tag color={statusMeta[status].color}>{tasks.length}</Tag>
         </Space>
       }
       extra={
-        <span className="column-subtitle">{columnDescriptions[status]}</span>
+        <span className="column-subtitle">{t(columnDescriptions[status])}</span>
       }
       className="status-column"
     >
       {tasks.length === 0 && (
-        <Empty description="Нет задач" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+        <Empty description={t("task.empty")} image={Empty.PRESENTED_IMAGE_SIMPLE} />
       )}
       <Space direction="vertical" size="middle" className="task-list">
         {tasks.map((task) => (
@@ -51,7 +54,7 @@ function StatusColumn({ status, tasks, onSelectTask }: StatusColumnProps) {
           >
             <Space direction="vertical" size={2}>
               <Tag color={priorityMeta[task.priority ?? "medium"].color} style={{ marginBottom: 2 }}>
-                {priorityMeta[task.priority ?? "medium"].label}
+                {t(priorityMeta[task.priority ?? "medium"].label)}
               </Tag>
               <div className="meta-row">
                 <span className="meta-label">created</span>

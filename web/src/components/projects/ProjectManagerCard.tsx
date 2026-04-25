@@ -1,6 +1,7 @@
 import { FolderAddOutlined } from "@ant-design/icons";
 import { Button, Card, Input, Popconfirm, Select, Space } from "antd";
 
+import { useTranslation } from "../../i18n";
 import type { Project } from "../../types";
 
 type ProjectManagerCardProps = {
@@ -28,12 +29,13 @@ function ProjectManagerCard({
   onDeleteProject,
   deletingProject,
 }: ProjectManagerCardProps) {
+  const { t } = useTranslation();
   return (
-    <Card className="project-card" title="Управление проектами">
+    <Card className="project-card" title={t("project.manageTitle")}>
       <Space direction="vertical" size="middle" className="project-row">
         <Space.Compact>
           <Input
-            placeholder="Новый проект"
+            placeholder={t("project.namePlaceholder")}
             value={newProjectName}
             onChange={(e) => onNewProjectNameChange(e.target.value)}
             onPressEnter={onCreateProject}
@@ -44,28 +46,28 @@ function ProjectManagerCard({
             onClick={onCreateProject}
             loading={creatingProject}
           >
-            Создать
+            {t("common.create")}
           </Button>
         </Space.Compact>
         <Space size="middle" wrap>
           <Select
-            placeholder="Выберите проект для удаления"
+            placeholder={t("project.selectToDelete")}
             loading={loadingProjects}
             value={selectedProject ?? undefined}
             onChange={onProjectChange}
             options={projects.map((p) => ({
               value: p.id,
-              label: p.isInbox ? "Входящие" : p.name,
+              label: p.isInbox ? t("common.inbox") : p.name,
             }))}
             style={{ minWidth: 240 }}
           />
           <Popconfirm
-            title="Удалить проект и все его задачи?"
+            title={t("project.deleteConfirm")}
             onConfirm={onDeleteProject}
             disabled={!selectedProject}
           >
             <Button danger loading={deletingProject} disabled={!selectedProject}>
-              Удалить проект
+              {t("project.deleteButton")}
             </Button>
           </Popconfirm>
         </Space>

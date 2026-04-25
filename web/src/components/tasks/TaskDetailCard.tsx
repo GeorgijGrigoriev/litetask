@@ -9,6 +9,7 @@ import { Button, Card, Input, Popconfirm, Select, Space, Tag } from "antd";
 import { useState } from "react";
 
 import { priorityMeta, priorityOrder, statusMeta, statusOrder } from "../../constants";
+import { useTranslation } from "../../i18n";
 import type { PriorityKey, Project, StatusKey, Task, User } from "../../types";
 import { formatAuthor, formatDate } from "../../utils/formatters";
 
@@ -63,16 +64,19 @@ function TaskDetailCard({
   onMoveTask,
   onChangePriority,
 }: TaskDetailCardProps) {
+  const { t } = useTranslation();
   const [pendingProjectId, setPendingProjectId] = useState<number | null>(null);
   const pendingProject = projects.find((p) => p.id === pendingProjectId);
-  const pendingProjectName = pendingProject?.isInbox ? "Входящие" : pendingProject?.name;
+  const pendingProjectName = pendingProject?.isInbox
+    ? t("common.inbox")
+    : pendingProject?.name;
   return (
     <Card
       className="task-details-card"
       title={
         <Space size="middle">
           <Button type="link" icon={<ArrowLeftOutlined />} onClick={onClose}>
-            К списку задач
+            {t("task.backToList")}
           </Button>
           <span className="detail-title">{task.title}</span>
         </Space>
@@ -80,7 +84,7 @@ function TaskDetailCard({
       extra={
         <Space size="small" wrap>
           <Tag color={statusMeta[task.status].color}>
-            {statusMeta[task.status].label}
+            {t(statusMeta[task.status].label)}
           </Tag>
           <Select
             size="small"
@@ -88,7 +92,7 @@ function TaskDetailCard({
             onChange={(value) => onChangeStatus(task.id, value as StatusKey)}
             dropdownMatchSelectWidth={false}
             options={statusOrder.map((status) => ({
-              label: statusMeta[status].label,
+              label: t(statusMeta[status].label),
               value: status,
             }))}
             suffixIcon={
@@ -101,7 +105,7 @@ function TaskDetailCard({
             style={{ minWidth: 180 }}
           />
           <Tag color={priorityMeta[task.priority ?? "medium"].color}>
-            {priorityMeta[task.priority ?? "medium"].label}
+            {t(priorityMeta[task.priority ?? "medium"].label)}
           </Tag>
           <Select
             size="small"
@@ -109,13 +113,13 @@ function TaskDetailCard({
             onChange={(value) => onChangePriority(task.id, value as PriorityKey)}
             dropdownMatchSelectWidth={false}
             options={priorityOrder.map((p) => ({
-              label: priorityMeta[p].label,
+              label: t(priorityMeta[p].label),
               value: p,
             }))}
             style={{ minWidth: 130 }}
           />
           <Popconfirm
-            title={`Переместить в «${pendingProjectName}»?`}
+            title={t("task.moveConfirm", { name: pendingProjectName ?? "" })}
             open={pendingProjectId !== null}
             onConfirm={() => {
               if (pendingProjectId !== null) onMoveTask(task.id, pendingProjectId);
@@ -125,7 +129,7 @@ function TaskDetailCard({
           >
             <Select
               size="small"
-              placeholder="Переместить в…"
+              placeholder={t("task.moveTo")}
               value={null}
               onChange={(value: number) => setPendingProjectId(value)}
               loading={movingTaskId === task.id}
@@ -138,11 +142,14 @@ function TaskDetailCard({
               suffixIcon={<FolderOpenOutlined />}
               options={projects
                 .filter((p) => p.id !== task.projectId)
-                .map((p) => ({ label: p.isInbox ? "Входящие" : p.name, value: p.id }))}
+                .map((p) => ({
+                  label: p.isInbox ? t("common.inbox") : p.name,
+                  value: p.id,
+                }))}
             />
           </Popconfirm>
           <Popconfirm
-            title="Удалить задачу?"
+            title={t("task.deleteConfirm")}
             onConfirm={() => onDeleteTask(task.id)}
           >
             <Button
@@ -150,7 +157,7 @@ function TaskDetailCard({
               danger
               loading={deletingTaskId === task.id}
             >
-              Удалить
+              {t("common.delete")}
             </Button>
           </Popconfirm>
         </Space>
@@ -159,18 +166,18 @@ function TaskDetailCard({
       <Space direction="vertical" size="large" className="detail-content">
         <Space size="large" className="detail-meta" wrap>
           <div className="meta-row">
-            <span className="meta-label">Создана:</span>
+            <span className="meta-label">{t("task.createdAt")}</span>
             <span className="meta-value">{formatDate(task.createdAt)}</span>
           </div>
           <div className="meta-row">
-            <span className="meta-label">Автор:</span>
+            <span className="meta-label">{t("task.author")}</span>
             <span className="meta-value">{formatAuthor(task)}</span>
           </div>
         </Space>
 
         <div className="detail-section">
           <div className="section-header">
-            <span className="meta-label">Описание</span>
+            <span className="meta-label">{t("task.description")}</span>
           </div>
           {editingId === task.id ? (
             <Space
@@ -182,7 +189,7 @@ function TaskDetailCard({
                 value={descriptionDraft}
                 onChange={(e) => onDescriptionDraftChange(e.target.value)}
                 autoSize={{ minRows: 3, maxRows: 6 }}
-                placeholder="Опишите детали задачи"
+                placeholder={t("task.descriptionEditPlaceholder")}
               />
               <Space size="small">
                 <Button
@@ -190,18 +197,18 @@ function TaskDetailCard({
                   onClick={() => onSaveDescription(task.id)}
                   loading={updatingId === task.id}
                 >
-                  Сохранить
+                  {t("common.save")}
                 </Button>
-                <Button onClick={onCancelEditDescription}>Отмена</Button>
+                <Button onClick={onCancelEditDescription}>{t("common.cancel")}</Button>
               </Space>
             </Space>
           ) : (
             <div className="description-display">
               <p className={task.description ? "meta-value" : "muted-text"}>
-                {task.description || "Описание отсутствует"}
+                {task.description || t("task.noDescription")}
               </p>
               <Button type="link" onClick={() => onStartEditDescription(task)}>
-                Изменить
+                {t("common.edit")}
               </Button>
             </div>
           )}
@@ -209,7 +216,7 @@ function TaskDetailCard({
 
         <div className="detail-section">
           <div className="comments-header">
-            <span className="meta-label">Комментарии</span>
+            <span className="meta-label">{t("task.comments")}</span>
             <Tag color="default">{task.comments?.length ?? 0}</Tag>
           </div>
           {task.comments && task.comments.length > 0 ? (
@@ -219,10 +226,10 @@ function TaskDetailCard({
                   <div className="comment-meta">
                     <span>{formatDate(comment.createdAt)}</span>
                     <Space size="small">
-                      <span>{comment.authorEmail || "Не указан"}</span>
+                      <span>{comment.authorEmail || t("task.authorUnknown")}</span>
                       {comment.authorId === user.id && (
                         <Popconfirm
-                          title="Удалить комментарий?"
+                          title={t("task.deleteCommentConfirm")}
                           onConfirm={() => onDeleteComment(comment.id)}
                         >
                           <Button
@@ -231,7 +238,7 @@ function TaskDetailCard({
                             danger
                             loading={deletingCommentId === comment.id}
                           >
-                            Удалить
+                            {t("common.delete")}
                           </Button>
                         </Popconfirm>
                       )}
@@ -242,14 +249,14 @@ function TaskDetailCard({
               ))}
             </Space>
           ) : (
-            <div className="muted-text">Комментариев нет</div>
+            <div className="muted-text">{t("task.noComments")}</div>
           )}
           <div className="comment-form">
             <Input.TextArea
               value={commentDraft}
               onChange={(e) => onCommentDraftChange(e.target.value)}
               autoSize={{ minRows: 3, maxRows: 4 }}
-              placeholder="Новый комментарий"
+              placeholder={t("task.commentPlaceholder")}
             />
             <Button
               type="primary"
@@ -257,7 +264,7 @@ function TaskDetailCard({
               loading={addingComment}
               disabled={!commentDraft.trim()}
             >
-              Добавить комментарий
+              {t("task.addComment")}
             </Button>
           </div>
         </div>

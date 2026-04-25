@@ -1,6 +1,7 @@
 import { SettingOutlined } from "@ant-design/icons";
 import { Button, Drawer, Space, Tag } from "antd";
 
+import { useTranslation } from "../../i18n";
 import AutoRefreshControl from "../shared/AutoRefreshControl";
 import type { AutoRefreshIntervalMs, User } from "../../types";
 
@@ -27,9 +28,10 @@ function MobileNav({
   onOpenProfile,
   onLogout,
 }: MobileNavProps) {
+  const { t } = useTranslation();
   return (
     <Drawer
-      title="Меню"
+      title={t("nav.title")}
       placement="right"
       width={320}
       open={open}
@@ -44,13 +46,13 @@ function MobileNav({
           </div>
           <div className="mobile-nav-user__meta">
             <Tag color={user.role === "admin" ? "green" : "blue"}>
-              {user.role === "admin" ? "Админ" : "Пользователь"}
+              {user.role === "admin" ? t("nav.admin") : t("nav.user")}
             </Tag>
           </div>
         </div>
         {user.role === "admin" && (
           <Button block type="default" onClick={onToggleSettings}>
-            {activePage === "settings" ? "К задачам" : "Настройки"}
+            {activePage === "settings" ? t("nav.toTasks") : t("nav.settings")}
           </Button>
         )}
         <Button
@@ -59,14 +61,14 @@ function MobileNav({
           icon={<SettingOutlined />}
           onClick={onOpenProfile}
         >
-          Профиль
+          {t("nav.profile")}
         </Button>
         <AutoRefreshControl
           value={autoRefreshIntervalMs}
           onChange={onAutoRefreshChange}
         />
         <Button block type="primary" danger onClick={onLogout}>
-          Выйти
+          {t("nav.logout")}
         </Button>
       </Space>
     </Drawer>

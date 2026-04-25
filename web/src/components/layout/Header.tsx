@@ -1,6 +1,8 @@
 import { MenuOutlined } from "@ant-design/icons";
 import { Button, Layout } from "antd";
 
+import { useTranslation } from "../../i18n";
+
 type HeaderProps = {
   showMenuButton?: boolean;
   onMenuClick?: () => void;
@@ -14,6 +16,7 @@ function Header({
   brandHref,
   onBrandClick,
 }: HeaderProps) {
+  const { t } = useTranslation();
   const brand = (
     <div className="brand">
       <span className="brand-lite">LITE</span>
@@ -37,7 +40,7 @@ function Header({
           icon={<MenuOutlined />}
           className="header-menu-btn"
           onClick={onMenuClick}
-          aria-label="Открыть меню"
+          aria-label={t("nav.openMenu")}
         />
       )}
     </Layout.Header>

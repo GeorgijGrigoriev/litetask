@@ -1,5 +1,7 @@
 import { Button, Card, Form, Input, Tabs } from "antd";
 
+import { useTranslation } from "../../i18n";
+
 type AuthMode = "login" | "register";
 
 type AuthFormValues = {
@@ -25,14 +27,15 @@ function AuthCard({
   onAuthModeChange,
   onSubmit,
 }: AuthCardProps) {
+  const { t } = useTranslation();
   return (
-    <Card className="auth-card" title="Войдите или зарегистрируйтесь">
+    <Card className="auth-card" title={t("auth.cardTitle")}>
       <Tabs
         activeKey={authMode}
         onChange={(key) => onAuthModeChange(key as AuthMode)}
         items={[
-          { key: "login", label: "Вход" },
-          { key: "register", label: "Регистрация" },
+          { key: "login", label: t("auth.loginTab") },
+          { key: "register", label: t("auth.registerTab") },
         ]}
       />
       <Form
@@ -43,50 +46,50 @@ function AuthCard({
           <>
             <Form.Item
               name="username"
-              label="Юзернейм"
+              label={t("auth.username")}
               rules={[
-                { required: true, message: "Введите юзернейм" },
-                { min: 3, max: 32, message: "От 3 до 32 символов" },
+                { required: true, message: t("auth.usernameRequired") },
+                { min: 3, max: 32, message: t("auth.usernameLength") },
                 {
                   pattern: /^[A-Za-z0-9_.-]+$/,
-                  message: "Допустимы a-z, 0-9, _, ., -",
+                  message: t("auth.usernamePattern"),
                 },
               ]}
             >
               <Input
-                placeholder="юзернейм"
+                placeholder={t("auth.usernamePlaceholder")}
                 autoCapitalize="none"
                 autoCorrect="off"
               />
             </Form.Item>
-            <Form.Item name="firstName" label="Имя">
-              <Input placeholder="Имя (опционально)" />
+            <Form.Item name="firstName" label={t("auth.firstName")}>
+              <Input placeholder={t("auth.firstNameOptional")} />
             </Form.Item>
-            <Form.Item name="lastName" label="Фамилия">
-              <Input placeholder="Фамилия (опционально)" />
+            <Form.Item name="lastName" label={t("auth.lastName")}>
+              <Input placeholder={t("auth.lastNameOptional")} />
             </Form.Item>
           </>
         )}
         <Form.Item
           name="email"
-          label={authMode === "login" ? "Email или юзернейм" : "Email"}
+          label={authMode === "login" ? t("auth.emailOrUsername") : t("auth.email")}
           rules={[
             {
               required: true,
               message:
                 authMode === "login"
-                  ? "Введите email или юзернейм"
-                  : "Введите email",
+                  ? t("auth.emailOrUsernameRequired")
+                  : t("auth.emailRequired"),
             },
             ...(authMode === "register"
-              ? [{ type: "email" as const, message: "Введите email" }]
+              ? [{ type: "email" as const, message: t("auth.emailRequired") }]
               : []),
           ]}
         >
           <Input
             placeholder={
               authMode === "login"
-                ? "you@example.com или юзернейм"
+                ? t("auth.emailOrUsernamePlaceholder")
                 : "you@example.com"
             }
             autoCapitalize="none"
@@ -95,11 +98,11 @@ function AuthCard({
         </Form.Item>
         <Form.Item
           name="password"
-          label="Пароль"
+          label={t("auth.password")}
           rules={[
             { required: true },
             ...(authMode === "register"
-              ? [{ min: 6, message: "Минимум 6 символов" }]
+              ? [{ min: 6, message: t("auth.passwordMinLength") }]
               : []),
           ]}
         >
@@ -107,7 +110,7 @@ function AuthCard({
         </Form.Item>
         {authError && <div className="auth-error">{authError}</div>}
         <Button type="primary" htmlType="submit" block loading={authLoading}>
-          {authMode === "login" ? "Войти" : "Зарегистрироваться"}
+          {authMode === "login" ? t("auth.loginButton") : t("auth.registerButton")}
         </Button>
       </Form>
     </Card>

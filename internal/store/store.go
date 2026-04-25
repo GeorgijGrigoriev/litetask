@@ -96,6 +96,7 @@ type User struct {
 	FirstName string    `json:"firstName"`
 	LastName  string    `json:"lastName"`
 	Telegram  string    `json:"telegram"`
+	Language  string    `json:"language"`
 	CreatedAt time.Time `json:"createdAt"`
 }
 
@@ -405,8 +406,8 @@ func (s *Store) CreateUser(ctx context.Context, email, username, password, role,
 	if err != nil {
 		return u, fmt.Errorf("lastInsertId: %w", err)
 	}
-	err = s.db.QueryRowContext(ctx, `SELECT id, email, COALESCE(username, ''), password_hash, role, created_at, telegram, first_name, last_name FROM users WHERE id = ?`, id).
-		Scan(&u.ID, &u.Email, &u.Username, &u.Password, &u.Role, &u.CreatedAt, &u.Telegram, &u.FirstName, &u.LastName)
+	err = s.db.QueryRowContext(ctx, `SELECT id, email, COALESCE(username, ''), password_hash, role, created_at, telegram, first_name, last_name, COALESCE(language, 'ru') FROM users WHERE id = ?`, id).
+		Scan(&u.ID, &u.Email, &u.Username, &u.Password, &u.Role, &u.CreatedAt, &u.Telegram, &u.FirstName, &u.LastName, &u.Language)
 	if err != nil {
 		return u, err
 	}
@@ -425,8 +426,8 @@ func (s *Store) CreateUser(ctx context.Context, email, username, password, role,
 
 func (s *Store) GetUserByEmail(ctx context.Context, email string) (User, error) {
 	var u User
-	err := s.db.QueryRowContext(ctx, `SELECT id, email, COALESCE(username, ''), password_hash, role, created_at, telegram, first_name, last_name FROM users WHERE email = ?`, email).
-		Scan(&u.ID, &u.Email, &u.Username, &u.Password, &u.Role, &u.CreatedAt, &u.Telegram, &u.FirstName, &u.LastName)
+	err := s.db.QueryRowContext(ctx, `SELECT id, email, COALESCE(username, ''), password_hash, role, created_at, telegram, first_name, last_name, COALESCE(language, 'ru') FROM users WHERE email = ?`, email).
+		Scan(&u.ID, &u.Email, &u.Username, &u.Password, &u.Role, &u.CreatedAt, &u.Telegram, &u.FirstName, &u.LastName, &u.Language)
 	if err != nil {
 		return u, err
 	}
@@ -438,14 +439,14 @@ func (s *Store) GetUserByEmailOrUsername(ctx context.Context, login string) (Use
 	var u User
 	login = strings.TrimSpace(strings.ToLower(login))
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, email, COALESCE(username, ''), password_hash, role, created_at, telegram, first_name, last_name
+		`SELECT id, email, COALESCE(username, ''), password_hash, role, created_at, telegram, first_name, last_name, COALESCE(language, 'ru')
 		FROM users
 		WHERE email = ? OR username = ?
 		ORDER BY id
 		LIMIT 1`,
 		login,
 		login,
-	).Scan(&u.ID, &u.Email, &u.Username, &u.Password, &u.Role, &u.CreatedAt, &u.Telegram, &u.FirstName, &u.LastName)
+	).Scan(&u.ID, &u.Email, &u.Username, &u.Password, &u.Role, &u.CreatedAt, &u.Telegram, &u.FirstName, &u.LastName, &u.Language)
 	if err != nil {
 		return u, err
 	}
@@ -455,8 +456,8 @@ func (s *Store) GetUserByEmailOrUsername(ctx context.Context, login string) (Use
 
 func (s *Store) GetUserByID(ctx context.Context, id int64) (User, error) {
 	var u User
-	err := s.db.QueryRowContext(ctx, `SELECT id, email, COALESCE(username, ''), password_hash, role, created_at, telegram, first_name, last_name FROM users WHERE id = ?`, id).
-		Scan(&u.ID, &u.Email, &u.Username, &u.Password, &u.Role, &u.CreatedAt, &u.Telegram, &u.FirstName, &u.LastName)
+	err := s.db.QueryRowContext(ctx, `SELECT id, email, COALESCE(username, ''), password_hash, role, created_at, telegram, first_name, last_name, COALESCE(language, 'ru') FROM users WHERE id = ?`, id).
+		Scan(&u.ID, &u.Email, &u.Username, &u.Password, &u.Role, &u.CreatedAt, &u.Telegram, &u.FirstName, &u.LastName, &u.Language)
 	if err != nil {
 		return u, err
 	}
@@ -465,7 +466,7 @@ func (s *Store) GetUserByID(ctx context.Context, id int64) (User, error) {
 }
 
 func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, email, COALESCE(username, ''), password_hash, role, created_at, telegram, first_name, last_name FROM users ORDER BY created_at DESC`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, email, COALESCE(username, ''), password_hash, role, created_at, telegram, first_name, last_name, COALESCE(language, 'ru') FROM users ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -473,7 +474,7 @@ func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
 	users := make([]User, 0)
 	for rows.Next() {
 		var u User
-		if err := rows.Scan(&u.ID, &u.Email, &u.Username, &u.Password, &u.Role, &u.CreatedAt, &u.Telegram, &u.FirstName, &u.LastName); err != nil {
+		if err := rows.Scan(&u.ID, &u.Email, &u.Username, &u.Password, &u.Role, &u.CreatedAt, &u.Telegram, &u.FirstName, &u.LastName, &u.Language); err != nil {
 			return nil, err
 		}
 		u.CreatedAt = u.CreatedAt.UTC()
@@ -581,8 +582,8 @@ func (s *Store) UpdateUserPassword(ctx context.Context, id int64, password strin
 	return s.GetUserByID(ctx, id)
 }
 
-func (s *Store) UpdateUserProfile(ctx context.Context, id int64, password *string, telegram *string, firstName *string, lastName *string) (User, error) {
-	if password == nil && telegram == nil && firstName == nil && lastName == nil {
+func (s *Store) UpdateUserProfile(ctx context.Context, id int64, password *string, telegram *string, firstName *string, lastName *string, language *string) (User, error) {
+	if password == nil && telegram == nil && firstName == nil && lastName == nil && language == nil {
 		return s.GetUserByID(ctx, id)
 	}
 	sets := make([]string, 0)
@@ -613,6 +614,11 @@ func (s *Store) UpdateUserProfile(ctx context.Context, id int64, password *strin
 	if lastName != nil {
 		sets = append(sets, "last_name = ?")
 		args = append(args, strings.TrimSpace(*lastName))
+	}
+
+	if language != nil {
+		sets = append(sets, "language = ?")
+		args = append(args, *language)
 	}
 
 	args = append(args, id)
@@ -936,6 +942,7 @@ CREATE TABLE IF NOT EXISTS users (
 	first_name TEXT NOT NULL DEFAULT '',
 	last_name TEXT NOT NULL DEFAULT '',
 	telegram TEXT NOT NULL DEFAULT '',
+	language TEXT NOT NULL DEFAULT 'en',
 	created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS tasks (
@@ -1059,6 +1066,11 @@ CREATE TABLE IF NOT EXISTS user_projects (
 	if _, err := db.Exec(`ALTER TABLE tasks ADD COLUMN priority TEXT NOT NULL DEFAULT 'medium'`); err != nil {
 		if !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
 			log.Printf("warning: unable to add priority column to tasks: %v", err)
+		}
+	}
+	if _, err := db.Exec(`ALTER TABLE users ADD COLUMN language TEXT NOT NULL DEFAULT 'en'`); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+			log.Printf("warning: unable to add language column to users: %v", err)
 		}
 	}
 

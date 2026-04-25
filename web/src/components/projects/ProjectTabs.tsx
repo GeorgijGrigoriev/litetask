@@ -1,6 +1,7 @@
 import { Badge, Card, Empty, Space, Tabs, Button } from "antd";
 import { ArrowDownOutlined, ArrowUpOutlined, PlusOutlined, SwapOutlined } from "@ant-design/icons";
 
+import { useTranslation } from "../../i18n";
 import type { Project } from "../../types";
 
 type ProjectTabsProps = {
@@ -26,6 +27,7 @@ function ProjectTabs({
   prioritySort,
   onTogglePrioritySort,
 }: ProjectTabsProps) {
+  const { t } = useTranslation();
   return (
     <Card className="project-card project-card--compact">
       <div className="project-card-header">
@@ -37,9 +39,9 @@ function ProjectTabs({
             disabled={!selectedProject}
             title="Option+N"
           >
-            Добавить задачу
+            {t("task.add")}
           </Button>
-          <Button onClick={onGoToQuick}>Быстрый ввод</Button>
+          <Button onClick={onGoToQuick}>{t("nav.quickInput")}</Button>
           <Button
             icon={
               prioritySort === "asc"
@@ -50,19 +52,19 @@ function ProjectTabs({
             }
             onClick={onTogglePrioritySort}
             type={prioritySort !== null ? "primary" : "default"}
-            title="Сортировка по приоритету"
+            title={t("task.priority")}
           >
             {prioritySort === "asc"
-              ? "Выс → Низ"
+              ? t("task.sortHighToLow")
               : prioritySort === "desc"
-              ? "Низ → Выс"
-              : "Приоритет"}
+              ? t("task.sortLowToHigh")
+              : t("task.priority")}
           </Button>
         </Space>
-        <div className="project-card-title">Проекты</div>
+        <div className="project-card-title">{t("project.title")}</div>
       </div>
       {projects.length === 0 && !loadingProjects ? (
-        <Empty description="Нет проектов. Создайте их в настройках" />
+        <Empty description={t("project.noProjects")} />
       ) : (
         <Tabs
           activeKey={selectedProject ? String(selectedProject) : undefined}
@@ -71,7 +73,7 @@ function ProjectTabs({
             key: String(p.id),
             label: (
               <Space size={6}>
-                <span>{p.isInbox ? "Входящие" : p.name}</span>
+                <span>{p.isInbox ? t("common.inbox") : p.name}</span>
                 <Badge
                   count={
                     projectTaskCounts[p.id] !== undefined

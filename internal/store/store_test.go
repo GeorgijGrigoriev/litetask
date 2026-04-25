@@ -247,7 +247,7 @@ func TestUsernameAndProfile(t *testing.T) {
 	telegram := "tg"
 	first := "Alice"
 	last := "Smith"
-	updated, err = st.UpdateUserProfile(ctx, u.ID, nil, &telegram, &first, &last)
+	updated, err = st.UpdateUserProfile(ctx, u.ID, nil, &telegram, &first, &last, nil)
 	if err != nil {
 		t.Fatalf("update profile: %v", err)
 	}

@@ -30,7 +30,7 @@ type Storer interface {
 	SetUsernameOnce(ctx context.Context, id int64, username string) (User, error)
 	UpdateUserRole(ctx context.Context, id int64, role string) (User, error)
 	UpdateUserPassword(ctx context.Context, id int64, password string) (User, error)
-	UpdateUserProfile(ctx context.Context, id int64, password *string, telegram *string, firstName *string, lastName *string) (User, error)
+	UpdateUserProfile(ctx context.Context, id int64, password *string, telegram *string, firstName *string, lastName *string, language *string) (User, error)
 	GetUserProjects(ctx context.Context, userID int64) ([]int64, error)
 	SetUserProjects(ctx context.Context, userID int64, projectIDs []int64) error
 	GetUserInboxID(ctx context.Context, userID int64) int64

@@ -1,5 +1,6 @@
 import { Select } from "antd";
 
+import { useTranslation } from "../../i18n";
 import type { AutoRefreshIntervalMs } from "../../types";
 
 type AutoRefreshControlProps = {
@@ -8,11 +9,12 @@ type AutoRefreshControlProps = {
 };
 
 function AutoRefreshControl({ value, onChange }: AutoRefreshControlProps) {
+  const { t } = useTranslation();
   return (
     <div className="auto-refresh-row">
       <div>
-        <div>Автообновление</div>
-        <div className="muted-text">Обновление задач</div>
+        <div>{t("autoRefresh.title")}</div>
+        <div className="muted-text">{t("autoRefresh.subtitle")}</div>
       </div>
       <Select
         value={value === null ? "off" : value}
@@ -24,11 +26,11 @@ function AutoRefreshControl({ value, onChange }: AutoRefreshControlProps) {
           }
         }}
         options={[
-          { label: "Выкл", value: "off" },
-          { label: "5 секунд", value: 5_000 },
-          { label: "30 секунд", value: 30_000 },
-          { label: "1 минута", value: 60_000 },
-          { label: "5 минут", value: 300_000 },
+          { label: t("autoRefresh.off"), value: "off" },
+          { label: t("autoRefresh.5s"), value: 5_000 },
+          { label: t("autoRefresh.30s"), value: 30_000 },
+          { label: t("autoRefresh.1m"), value: 60_000 },
+          { label: t("autoRefresh.5m"), value: 300_000 },
         ]}
         style={{ width: 140 }}
       />

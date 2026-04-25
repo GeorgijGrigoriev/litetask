@@ -1,5 +1,6 @@
 import { Button, Select, Space, Table, Tag } from "antd";
 
+import { useTranslation } from "../../i18n";
 import type { Project, User } from "../../types";
 
 type UserTableProps = {
@@ -29,6 +30,7 @@ function UserTable({
   onOpenUserInfo,
   onOpenPassword,
 }: UserTableProps) {
+  const { t } = useTranslation();
   return (
     <>
       <Button
@@ -36,7 +38,7 @@ function UserTable({
         style={{ marginBottom: 12 }}
         loading={loadingUsers}
       >
-        Обновить список
+        {t("admin.refreshList")}
       </Button>
       <Table<User>
         dataSource={users}
@@ -49,22 +51,22 @@ function UserTable({
             dataIndex: "email",
           },
           {
-            title: "Юзернейм",
+            title: t("admin.usernameColumn"),
             dataIndex: "username",
             render: (value: string | undefined) => value || "—",
           },
           {
-            title: "Имя",
+            title: t("admin.firstNameColumn"),
             dataIndex: "firstName",
             render: (value: string | undefined) => value || "—",
           },
           {
-            title: "Фамилия",
+            title: t("admin.lastNameColumn"),
             dataIndex: "lastName",
             render: (value: string | undefined) => value || "—",
           },
           {
-            title: "Проекты",
+            title: t("admin.projectsColumn"),
             dataIndex: "projectIds",
             render: (_: unknown, record) => (
               <Select
@@ -79,7 +81,7 @@ function UserTable({
                 }
                 options={projects.map((p) => ({
                   value: p.id,
-                  label: p.isInbox ? "Входящие" : p.name,
+                  label: p.isInbox ? t("common.inbox") : p.name,
                 }))}
                 loading={loadingProjects}
                 disabled={updatingProjectsId === record.id}
@@ -87,7 +89,7 @@ function UserTable({
             ),
           },
           {
-            title: "Роль",
+            title: t("admin.role"),
             dataIndex: "role",
             render: (role: User["role"]) => (
               <Tag
@@ -104,7 +106,7 @@ function UserTable({
             ),
           },
           {
-            title: "Действия",
+            title: t("admin.actions"),
             render: (_, record) => (
               <Space size="small" wrap>
                 <Button
@@ -114,7 +116,7 @@ function UserTable({
                   loading={updatingUserId === record.id}
                   disabled={record.role === "admin"}
                 >
-                  Сделать админом
+                  {t("admin.makeAdmin")}
                 </Button>
                 <Button
                   size="small"
@@ -122,7 +124,7 @@ function UserTable({
                   loading={updatingUserId === record.id}
                   disabled={record.role === "user"}
                 >
-                  Сделать пользователем
+                  {t("admin.makeUser")}
                 </Button>
                 <Button
                   size="small"
@@ -136,14 +138,14 @@ function UserTable({
                   loading={updatingUserId === record.id}
                 >
                   {record.role === "blocked"
-                    ? "Разблокировать"
-                    : "Заблокировать"}
+                    ? t("admin.unblock")
+                    : t("admin.block")}
                 </Button>
                 <Button size="small" onClick={() => onOpenUserInfo(record)}>
-                  Изменить имя
+                  {t("admin.editName")}
                 </Button>
                 <Button size="small" onClick={() => onOpenPassword(record)}>
-                  Сменить пароль
+                  {t("admin.changePassword")}
                 </Button>
               </Space>
             ),
