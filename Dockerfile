@@ -7,10 +7,10 @@ COPY web .
 RUN npm run build
 
 ### Go build
-FROM golang:1.25.1-alpine AS go-build
+FROM golang:1.26.2-alpine AS go-build
 WORKDIR /app
 RUN apk add --no-cache build-base
-ENV GOTOOLCHAIN=go1.25.1
+ENV GOTOOLCHAIN=go1.26.2
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .

@@ -181,8 +181,12 @@ func TestIgnoresWrongChannel(t *testing.T) {
 	ctx := context.Background()
 	b, s := newTestBot(t)
 	b.handleInteraction(ctx, s, interaction("wrong_channel", "help"))
-	if len(s.responses) != 0 {
-		t.Fatal("expected wrong channel to be ignored")
+	if len(s.responses) != 1 {
+		t.Fatalf("expected ephemeral response for wrong channel, got %d responses", len(s.responses))
+	}
+	resp := s.responses[0]
+	if resp != "⚠️ Команды бота доступны только в закрепленном канале." {
+		t.Fatalf("unexpected response: %q", resp)
 	}
 }
 
