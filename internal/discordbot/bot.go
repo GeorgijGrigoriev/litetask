@@ -117,6 +117,16 @@ func (b *Bot) handleInteraction(ctx context.Context, s discordSession, i *discor
 		return
 	}
 	if i.ChannelID != b.channelID {
+		err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: "⚠️ Команды бота доступны только в закрепленном канале.",
+				Flags:   discordgo.MessageFlagsEphemeral,
+			},
+		})
+		if err != nil {
+			log.Printf("discord bot: failed to respond with wrong channel msg: %v", err)
+		}
 		return
 	}
 	data := i.ApplicationCommandData()
