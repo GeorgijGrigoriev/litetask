@@ -1,7 +1,7 @@
 .PHONY: docker-build docker-build-amd64 build-frontend build build-amd64 dev
 
 IMAGE ?= litetask:latest
-GHCR_IMAGE ?= ghcr.io/georgijgrigoriev/litetask:v0.0.2
+GHCR_IMAGE ?= ghcr.io/georgijgrigoriev/litetask:latest
 
 docker-build:
 	docker build -t $(IMAGE) .
