@@ -16,10 +16,8 @@ build:
 	go build -o litetask ./cmd/litetask
 
 build-amd64:
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=1 \
-	CC=x86_64-linux-musl-gcc \
-	go build -ldflags="-linkmode external -extldflags '-static'" \
-	-o litetask-amd64 ./cmd/litetask
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
+	go build -o litetask-amd64 ./cmd/litetask
 
 dev:
 	cd web && npm run dev
